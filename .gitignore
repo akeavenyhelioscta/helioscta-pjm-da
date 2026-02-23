@@ -1,0 +1,36 @@
+# Python build/dist directories
+dist/*
+
+# Python cache files
+__pycache__/
+**/__pycache__/*
+*.py[cod]
+*$py.class
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# Logs
+**/logs/*
+*.log
+
+# claude
+.claude/*
+.claude/settings.local.json
+.claude/settings.json
+.claude/settings.json.local
+.claude/settings.json.local.json
+.claude/settings.json.local.json.local
+.claude/settings.json.local.json.local.json
+.claude/settings.json.local.json.local.json.local
+.claude/settings.json.local.json.local.json.local.json
+
+# misc files
+.archive/*
+.test/*
+docs/_build/
+
+# file types
+*.pdf
+*.csv
+*.xlsx
