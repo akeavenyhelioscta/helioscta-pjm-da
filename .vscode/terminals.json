@@ -1,0 +1,12 @@
+{
+    "autorun": true,
+    "terminals": [
+        {
+            "name": "claude",
+            "icon": "code",
+            "color": "terminal.ansiYellow",
+            "open": true,
+            "command": "claude"
+        },
+    ]
+}

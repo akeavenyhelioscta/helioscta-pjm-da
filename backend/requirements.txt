@@ -1,0 +1,22 @@
+# db
+psycopg2-binary==2.9.10
+pyodbc
+
+# ipython
+ipython
+jupyter
+notebook
+
+# python
+poetry==1.8.4
+python-dotenv==1.0.1
+numpy==2.0.2
+pandas>=2.0.0
+pyarrow>=12.0.0
+pytz
+scikit-learn
+tabulate
+
+# api
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0

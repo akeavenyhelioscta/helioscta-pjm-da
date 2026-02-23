@@ -1,0 +1,23 @@
+{
+    // python environment
+    "python.defaultInterpreterPath": "~/anaconda3/envs/helioscta-pjm-da/python",
+    "python.terminal.activateEnvironment": true,
+    "terminal.integrated.env.windows": {
+        "CONDA_DEFAULT_ENV": "helioscta-pjm-da"
+    },
+
+    // sqltools connections
+    "sqltools.connections": [
+        {
+            "ssh": "Disabled",
+            "previewLimit": 50,
+            "server": "heliosctadb.postgres.database.azure.com",
+            "port": 5432,
+            "driver": "PostgreSQL",
+            "name": "Helios PostgresSQL",
+            "database": "helioscta",
+            "username": "helioscta",
+            "password": "admin!2024"
+        }
+    ]
+}
