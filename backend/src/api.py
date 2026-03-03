@@ -1,6 +1,8 @@
 from datetime import date, datetime, timedelta
 from typing import Optional
 
+import numpy as np
+import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -137,4 +139,75 @@ def like_day(
         "n_neighbors": n_neighbors,
         "like_days": like_days_records.to_dict(orient="records"),
         "hourly_profiles": hourly_records.to_dict(orient="records"),
+    }
+
+
+def _serialize_df(df: pd.DataFrame) -> list[dict]:
+    """Serialize a DataFrame to JSON-safe records (NaN → None, dates → str)."""
+    df = df.copy()
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]):
+            df[col] = df[col].astype(str)
+        elif df[col].dtype == object:
+            df[col] = df[col].apply(lambda v: str(v) if isinstance(v, date) else v)
+    return df.where(df.notna(), None).to_dict(orient="records")
+
+
+@app.post("/like-day-forecast")
+def like_day_forecast(
+    forecast_date: Optional[str] = Query(
+        default=None,
+        description="Date to forecast (YYYY-MM-DD). Defaults to tomorrow.",
+    ),
+    n_analogs: int = Query(
+        default=30, ge=5, le=100,
+        description="Number of analog days to find.",
+    ),
+    weight_method: str = Query(
+        default="inverse_distance",
+        description="Weighting method: inverse_distance, equal, rank.",
+    ),
+):
+    # Lazy import to avoid settings.py side effects at startup
+    from pjm_like_day_forecast.pipelines.forecast import run as run_forecast
+
+    try:
+        result = run_forecast(
+            forecast_date=forecast_date,
+            n_analogs=n_analogs,
+            weight_method=weight_method,
+        )
+    except Exception as e:
+        logging.error(f"Like-day forecast pipeline failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Pipeline error: {str(e)}")
+
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    # Serialize DataFrames
+    output_table = _serialize_df(result["output_table"])
+    quantiles_table = _serialize_df(result["quantiles_table"])
+    analogs = _serialize_df(result["analogs"])
+
+    # Build fan chart data from df_forecast
+    fan_chart = []
+    df_fc = result["df_forecast"]
+    for _, row in df_fc.iterrows():
+        point = {"hour_ending": int(row["hour_ending"]), "point_forecast": row["point_forecast"]}
+        for col in df_fc.columns:
+            if col.startswith("q_"):
+                val = row[col]
+                point[col] = None if (isinstance(val, float) and np.isnan(val)) else val
+        fan_chart.append(point)
+
+    return {
+        "forecast_date": result["forecast_date"],
+        "reference_date": result["reference_date"],
+        "has_actuals": result["has_actuals"],
+        "n_analogs_used": result["n_analogs_used"],
+        "output_table": output_table,
+        "quantiles_table": quantiles_table,
+        "fan_chart": fan_chart,
+        "analogs": analogs,
+        "metrics": result["metrics"],
     }

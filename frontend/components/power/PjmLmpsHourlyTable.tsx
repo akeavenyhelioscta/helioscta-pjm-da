@@ -157,7 +157,7 @@ function CustomTooltip({
 
 function defaultStart(): string {
   const d = new Date();
-  d.setDate(d.getDate() + 1 - 100);
+  d.setDate(d.getDate() + 1 - 7);
   return d.toISOString().slice(0, 10);
 }
 function tomorrowStr(): string {
@@ -183,7 +183,7 @@ export default function PjmLmpsHourlyTable() {
   const [marketInput, setMarketInput] = useState("da");
   const [startInput, setStartInput] = useState(defaultStart);
   const [endInput, setEndInput] = useState(tomorrowStr);
-  const [daysInput, setDaysInput] = useState("100");
+  const [daysInput, setDaysInput] = useState("7");
 
   /* --- data state --- */
   const [data, setData] = useState<RawRow[]>([]);
