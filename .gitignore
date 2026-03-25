@@ -25,6 +25,22 @@ __pycache__/
 .claude/settings.json.local.json.local.json.local
 .claude/settings.json.local.json.local.json.local.json
 
+# environment variables
+.env
+.mcp.json
+
+# W&B
+wandb/
+**/wandb/
+
+# Validation & profiling reports
+**/validation/reports/
+**/like_day_forecast/reports/
+**/reporting/output/
+
+# Data cache (parquet + metadata)
+**/like_day_forecast/cache/
+
 # misc files
 .archive/*
 .test/*
@@ -34,3 +50,12 @@ docs/_build/
 *.pdf
 *.csv
 *.xlsx
+
+# misc folders
+.archive/*
+.excel/*
+.repos/*
+TODO/
+
+# MLflow
+*.db

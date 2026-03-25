@@ -11,10 +11,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install like-day-model as editable package
-COPY like-day-model /like-day-model
-RUN pip install --no-cache-dir -e /like-day-model
-
 # Copy application code
 COPY backend/ .
 

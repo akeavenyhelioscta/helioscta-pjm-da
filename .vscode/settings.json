@@ -1,12 +1,7 @@
 {
-    // python environment
-    "python.defaultInterpreterPath": "~/miniconda3/envs/helioscta-pjm-da/python",
+    "python.defaultInterpreterPath": "C:/Users/AidanKeaveny/miniconda3/envs/helioscta-pjm-da/python.exe",
     "python.terminal.activateEnvironment": true,
-    "terminal.integrated.env.windows": {
-        "CONDA_DEFAULT_ENV": "helioscta-pjm-da"
-    },
-
-    // sqltools connections
+    "terminal.integrated.defaultProfile.windows": "Git Bash",
     "sqltools.connections": [
         {
             "ssh": "Disabled",
@@ -19,5 +14,40 @@
             "username": "helioscta",
             "password": "admin!2024"
         }
-    ]
+    ],
+    // Todo Tree — PLAN.md integration
+    "todo-tree.regex.regex": "(//|#|<!--|;|/\\*|^|^\\s*(-|\\d+\\.)\\s*(\\[.\\]\\s*)?)\\s*($TAGS)",
+    "todo-tree.general.tags": ["TODO", "DOING", "BLOCKED", "DONE", "QUESTION"],
+    "todo-tree.highlights.defaultHighlight": {
+        "type": "tag"
+    },
+    "todo-tree.highlights.customHighlight": {
+        "TODO": {
+            "icon": "circle",
+            "foreground": "#FF8C00",
+            "iconColour": "#FF8C00"
+        },
+        "DOING": {
+            "icon": "clock",
+            "foreground": "#1E90FF",
+            "iconColour": "#1E90FF"
+        },
+        "BLOCKED": {
+            "icon": "alert",
+            "foreground": "#DC143C",
+            "iconColour": "#DC143C"
+        },
+        "DONE": {
+            "icon": "check",
+            "foreground": "#32CD32",
+            "iconColour": "#32CD32"
+        },
+        "QUESTION": {
+            "icon": "question",
+            "foreground": "#9370DB",
+            "iconColour": "#9370DB"
+        }
+    },
+    "todo-tree.tree.groupedByTag": true,
+    "todo-tree.filtering.includeGlobs": ["**/*.md", "**/*.py", "**/*.ts", "**/*.tsx", "**/*.sql"]
 }

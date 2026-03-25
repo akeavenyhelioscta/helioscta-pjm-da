@@ -1,0 +1,52 @@
+# W&B Sweep — backtest: fixed config across multiple forecast dates
+# Usage:
+#   wandb sweep sweeps/backtest.yaml
+#   wandb agent <SWEEP_ID>
+#
+# Or use the runner's built-in backtest mode:
+#   python scripts/run_sweep.py --backtest --start-date 2026-02-15 --end-date 2026-03-12
+
+program: src/like_day_forecast/scripts/run_sweep.py
+method: grid
+
+metric:
+  name: mae
+  goal: minimize
+
+parameters:
+  forecast_date:
+    values:
+      - "2026-02-15"
+      - "2026-02-16"
+      - "2026-02-17"
+      - "2026-02-18"
+      - "2026-02-19"
+      - "2026-02-20"
+      - "2026-02-21"
+      - "2026-02-22"
+      - "2026-02-23"
+      - "2026-02-24"
+      - "2026-02-25"
+      - "2026-02-26"
+      - "2026-02-27"
+      - "2026-02-28"
+      - "2026-03-01"
+      - "2026-03-02"
+      - "2026-03-03"
+      - "2026-03-04"
+      - "2026-03-05"
+      - "2026-03-06"
+      - "2026-03-07"
+      - "2026-03-08"
+      - "2026-03-09"
+      - "2026-03-10"
+      - "2026-03-11"
+      - "2026-03-12"
+  n_analogs:
+    values: [30]
+  weight_method:
+    values: ["inverse_distance"]
+  season_window_days:
+    values: [30]
+  same_dow_group:
+    values: [true]

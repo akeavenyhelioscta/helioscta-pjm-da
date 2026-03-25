@@ -1,0 +1,24 @@
+# W&B Sweep — grid search over core hyperparameters
+# Usage:
+#   wandb sweep sweeps/grid_search.yaml          # creates sweep
+#   wandb agent <SWEEP_ID> --count 224            # runs all combos
+#
+# Or from the runner script:
+#   python scripts/run_sweep.py --sweep-config sweeps/grid_search.yaml --count 224
+
+program: src/like_day_forecast/scripts/run_sweep.py
+method: grid
+
+metric:
+  name: mae
+  goal: minimize
+
+parameters:
+  n_analogs:
+    values: [10, 15, 20, 25, 30, 40, 50]
+  weight_method:
+    values: ["inverse_distance", "softmax", "rank", "uniform"]
+  season_window_days:
+    values: [30, 45, 60, 90]
+  same_dow_group:
+    values: [true, false]

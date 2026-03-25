@@ -254,7 +254,7 @@ def upsert_to_azure_postgresql(
     """
     """
 
-    # TODO: null values
+    # NOTE: null values
     df = df.fillna(0)
 
     # infer data types

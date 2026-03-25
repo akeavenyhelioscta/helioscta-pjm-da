@@ -6,8 +6,8 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.pjm_like_day import configs
-from src.pjm_like_day.pipeline import run
+from src.like_day_forecast import configs
+from src.like_day_forecast.pipeline import run
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -165,18 +165,41 @@ def like_day_forecast(
     ),
     weight_method: str = Query(
         default="inverse_distance",
-        description="Weighting method: inverse_distance, equal, rank.",
+        description="Weighting method: inverse_distance, softmax, rank, uniform.",
+    ),
+    season_window_days: int = Query(
+        default=30, ge=7, le=180,
+        description="Season proximity window in days for pre-filtering.",
+    ),
+    same_dow_group: bool = Query(
+        default=True,
+        description="Whether to enforce same day-of-week group filtering.",
+    ),
+    apply_calendar_filter: bool = Query(
+        default=True,
+        description="Whether to apply calendar (DOW + season) filtering.",
+    ),
+    apply_regime_filter: bool = Query(
+        default=True,
+        description="Whether to apply LMP/gas regime filtering.",
     ),
 ):
     # Lazy import to avoid settings.py side effects at startup
-    from pjm_like_day_forecast.pipelines.forecast import run as run_forecast
+    from src.like_day_forecast.pipelines.forecast import run as run_forecast
+    from src.like_day_forecast.configs import ScenarioConfig
+
+    scenario_config = ScenarioConfig(
+        forecast_date=forecast_date,
+        n_analogs=n_analogs,
+        weight_method=weight_method,
+        season_window_days=season_window_days,
+        same_dow_group=same_dow_group,
+        apply_calendar_filter=apply_calendar_filter,
+        apply_regime_filter=apply_regime_filter,
+    )
 
     try:
-        result = run_forecast(
-            forecast_date=forecast_date,
-            n_analogs=n_analogs,
-            weight_method=weight_method,
-        )
+        result = run_forecast(config=scenario_config)
     except Exception as e:
         logging.error(f"Like-day forecast pipeline failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Pipeline error: {str(e)}")
