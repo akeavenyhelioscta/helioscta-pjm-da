@@ -8,8 +8,6 @@ exclude = ["*.logs", "*.png", "*.csv", "*.xlsx", "*.xlsm"]
 
 [tool.poetry.dependencies]
 python = ">=3.12,<3.13"
-fastapi = ">=0.115.0"
-uvicorn = {version = ">=0.34.0", extras = ["standard"]}
 psycopg2-binary = "==2.9.10"
 python-dotenv = "==1.0.1"
 numpy = "==2.0.2"

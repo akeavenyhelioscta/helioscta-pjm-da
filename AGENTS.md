@@ -23,9 +23,9 @@
 
 ## Data & Backend References
 - When looking for data, always use MCP connections and refer to the backend repo.
-- Backend repo for data pipelines, schemas, and dbt models: [`.SKILLS/backend-repo-for-data.md`](./.SKILLS/backend-repo-for-data.md).
+- Backend repo for data pipelines, schemas, and dbt models: [`.claude/standards/backend-repo-for-data.md`](./.claude/standards/backend-repo-for-data.md).
 - Backend repo path: `C:\Users\AidanKeaveny\Documents\github\helioscta-backend\backend`
 
 ## Agent References
-- Frontend theme/style preferences: [`.SKILLS/frontend-styling.md`](./.SKILLS/frontend-styling.md).
-- Backend data reference: [`.SKILLS/backend-repo-for-data.md`](./.SKILLS/backend-repo-for-data.md).
+- Frontend theme/style preferences: [`.claude/standards/frontend-styling.md`](./.claude/standards/frontend-styling.md).
+- Backend data reference: [`.claude/standards/backend-repo-for-data.md`](./.claude/standards/backend-repo-for-data.md).

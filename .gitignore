@@ -16,6 +16,7 @@ __pycache__/
 
 # claude
 .claude/*
+!.claude/standards/
 .claude/settings.local.json
 .claude/settings.json
 .claude/settings.json.local
