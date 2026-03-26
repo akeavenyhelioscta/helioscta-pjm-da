@@ -8,6 +8,7 @@ Output table format (matches da-model for comparability):
 """
 import logging
 from datetime import date, timedelta
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -18,6 +19,7 @@ from src.like_day_forecast.features.builder import build_daily_features
 from src.like_day_forecast.similarity.engine import find_analogs
 from src.like_day_forecast.data import lmps_hourly
 from src.like_day_forecast.evaluation.metrics import evaluate_forecast
+from src.like_day_forecast.utils.cache_utils import pull_with_cache
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +54,10 @@ def run(
     n_analogs: int = configs.DEFAULT_N_ANALOGS,
     weight_method: str = "inverse_distance",
     config: configs.ScenarioConfig | None = None,
+    cache_dir: Path | None = configs.CACHE_DIR,
+    cache_enabled: bool = configs.CACHE_ENABLED,
+    cache_ttl_hours: float = configs.CACHE_TTL_HOURS,
+    force_refresh: bool = configs.FORCE_CACHE_REFRESH,
 ) -> dict:
     """Run the like-day forecast pipeline for a single target date.
 
@@ -68,6 +74,10 @@ def run(
         n_analogs: Number of analog days to find.
         weight_method: Weighting method for analogs.
         config: Optional ScenarioConfig that overrides all other args.
+        cache_dir: Directory for parquet cache files.
+        cache_enabled: Master cache switch.
+        cache_ttl_hours: Hours before cached data is considered stale.
+        force_refresh: If True, bypass cache and pull fresh.
 
     Returns:
         Dict with output_table, quantiles_table, analogs, metrics.
@@ -93,9 +103,22 @@ def run(
                 f"season_window={config.season_window_days} dow_filter={config.same_dow_group}")
     logger.info("=" * 60)
 
+    builder_cache_kwargs = dict(
+        cache_dir=cache_dir,
+        cache_enabled=cache_enabled,
+        cache_ttl_hours=cache_ttl_hours,
+        force_refresh=force_refresh,
+    )
+    pull_cache_kwargs = dict(
+        cache_dir=cache_dir,
+        cache_enabled=cache_enabled,
+        ttl_hours=cache_ttl_hours,
+        force_refresh=force_refresh,
+    )
+
     # 1. Build daily feature matrix
     logger.info("Building daily feature matrix...")
-    df_features = build_daily_features(schema=config.schema)
+    df_features = build_daily_features(schema=config.schema, hub=config.hub, **builder_cache_kwargs)
 
     available_dates = sorted(df_features["date"].unique())
     logger.info(f"Feature matrix: {len(available_dates):,} days "
@@ -129,9 +152,16 @@ def run(
         adaptive_softmax_temperature=config.adaptive_softmax_temperature,
     )
 
-    # 3. Pull raw hourly DA LMP data
+    # 3. Pull raw hourly DA LMP data (cache hit if builder already cached it)
     logger.info("Pulling hourly DA LMP data for analog next-days...")
-    df_lmp_all = lmps_hourly.pull(schema=config.schema, hub=config.hub, market="da")
+    df_lmp_all = pull_with_cache(
+        source_name="lmps_hourly_da",
+        pull_fn=lmps_hourly.pull,
+        pull_kwargs={"schema": config.schema, "hub": config.hub, "market": "da"},
+        **pull_cache_kwargs,
+    )
+    # Safety: parquet round-trip may convert date to datetime64
+    df_lmp_all["date"] = pd.to_datetime(df_lmp_all["date"]).dt.date
 
     # For each analog date, we want the NEXT DAY's hourly LMP profile
     analog_next_dates = [d + timedelta(days=1) for d in analogs_df["date"]]

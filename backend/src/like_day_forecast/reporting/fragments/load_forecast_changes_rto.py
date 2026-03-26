@@ -1,7 +1,8 @@
-"""Load Forecast Changes RTO report — PJM + Meteologica vintage comparison.
+"""Load Forecast Changes RTO report for PJM + Meteologica vintage comparison.
 
-For each source, compares up to 4 forecast vintages selected by execution
-timestamp:  Latest, -12h, -24h, -48h.
+For each source, compares 5 forecast vintages:
+Latest, DA Cutoff, DA -12h, DA -24h, and DA -48h.
+Each vintage uses rank-based as-of selection per forecast date/hour.
 
 Each source section includes:
   1. Vintage info badges (exact execution timestamps with EPT labels)
@@ -18,7 +19,10 @@ import plotly.graph_objects as go
 import plotly.io as pio
 
 from src.like_day_forecast import configs
-from src.like_day_forecast.data.load_forecast_vintages import pull_all_vintages
+from src.like_day_forecast.data import (
+    pjm_load_forecast_hourly,
+    meteologica_load_forecast_hourly,
+)
 from src.like_day_forecast.utils.cache_utils import pull_with_cache
 
 logger = logging.getLogger(__name__)
@@ -31,25 +35,33 @@ Section = tuple[str, Any, str | None]
 
 VINTAGE_COLORS: dict[str, str] = {
     "Latest": "#60a5fa",
-    "-12h": "#a78bfa",
-    "-24h": "#34d399",
-    "-48h": "#fbbf24",
+    "DA Cutoff": "#f87171",
+    "DA -12h": "#a78bfa",
+    "DA -24h": "#34d399",
+    "DA -48h": "#fbbf24",
 }
 VINTAGE_DASH: dict[str, str] = {
     "Latest": "solid",
-    "-12h": "dash",
-    "-24h": "dot",
-    "-48h": "dashdot",
+    "DA Cutoff": "solid",
+    "DA -12h": "dash",
+    "DA -24h": "dot",
+    "DA -48h": "dashdot",
 }
 VINTAGE_WIDTH: dict[str, float] = {
     "Latest": 2.5,
-    "-12h": 2.0,
-    "-24h": 1.8,
-    "-48h": 1.5,
+    "DA Cutoff": 2.2,
+    "DA -12h": 2.0,
+    "DA -24h": 1.8,
+    "DA -48h": 1.5,
 }
 
 # Canonical display order
-_VINTAGE_ORDER = ["Latest", "-12h", "-24h", "-48h"]
+_VINTAGE_ORDER = ["Latest", "DA Cutoff", "DA -12h", "DA -24h", "DA -48h"]
+
+_SOURCE_MODULES = {
+    "pjm": pjm_load_forecast_hourly,
+    "meteologica": meteologica_load_forecast_hourly,
+}
 
 
 # ── Public entry point ───────────────────────────────────────────────
@@ -78,9 +90,9 @@ def build_fragments(
         logger.info(f"Processing {source_label} vintages...")
 
         df = _safe_pull(
-            f"forecast_evolution_{source_key}",
-            pull_all_vintages,
-            {"source": source_key},
+            f"forecast_evolution_{source_key}_latest_da_cutoff_v2",
+            _pull_source_vintages,
+            {"source": source_key, "region": "RTO"},
             **cache_kwargs,
         )
 
@@ -125,6 +137,57 @@ def _safe_pull(source_name, pull_fn, pull_kwargs, **cache_kwargs):
         return None
 
 
+def _pull_source_vintages(source: str, region: str = "RTO") -> pd.DataFrame:
+    """Pull Latest + 4 DA cutoff vintages for one source.
+
+    - Latest: most recent forecast per (date, hour_ending) from today onward,
+      via the source's ``pull()`` function.
+    - DA Cutoff / DA -12h / DA -24h / DA -48h: from the standalone
+      ``load_forecast_da_cutoff_vintages.sql`` via ``pull_da_cutoff_vintages()``.
+    """
+    if source not in _SOURCE_MODULES:
+        raise ValueError(f"Unknown source: {source!r}. Must be one of {list(_SOURCE_MODULES)}")
+
+    mod = _SOURCE_MODULES[source]
+    _cols = ["forecast_date", "hour_ending", "forecast_load_mw",
+             "forecast_execution_datetime", "vintage_label",
+             "vintage_anchor_execution_datetime"]
+
+    # 1. Latest vintage
+    df_latest = mod.pull(region=region)
+    if df_latest is not None and len(df_latest) > 0:
+        df_latest["forecast_date"] = pd.to_datetime(df_latest["forecast_date"])
+        df_latest["vintage_label"] = "Latest"
+        df_latest["vintage_anchor_execution_datetime"] = pd.to_datetime(
+            df_latest["forecast_execution_datetime"]
+        ).max()
+        df_latest = df_latest[_cols]
+    else:
+        df_latest = pd.DataFrame(columns=_cols)
+
+    # 2. DA cutoff vintages
+    df_da = mod.pull_da_cutoff_vintages(region=region)
+    if df_da is not None and len(df_da) > 0:
+        df_da["forecast_date"] = pd.to_datetime(df_da["forecast_date"])
+        df_da = df_da[_cols]
+    else:
+        df_da = pd.DataFrame(columns=_cols)
+
+    df = pd.concat([df_latest, df_da], ignore_index=True)
+    if len(df) == 0:
+        logger.warning(f"No vintage rows found for source={source}, region={region}")
+        return pd.DataFrame()
+
+    df["hour_ending"] = pd.to_numeric(df["hour_ending"], errors="coerce").astype("Int64")
+    df["forecast_load_mw"] = pd.to_numeric(df["forecast_load_mw"], errors="coerce")
+    df["forecast_execution_datetime"] = pd.to_datetime(df["forecast_execution_datetime"])
+    df["vintage_anchor_execution_datetime"] = pd.to_datetime(df["vintage_anchor_execution_datetime"])
+
+    df = df.dropna(subset=["forecast_date", "hour_ending", "forecast_load_mw", "vintage_label"]).copy()
+    df["hour_ending"] = df["hour_ending"].astype(int)
+    return df
+
+
 def _filter_common_intervals(df: pd.DataFrame) -> pd.DataFrame:
     """Keep only (date, hour_ending) pairs present in ALL vintages."""
     labels = df["vintage_label"].unique()
@@ -134,14 +197,14 @@ def _filter_common_intervals(df: pd.DataFrame) -> pd.DataFrame:
     common = None
     for label in labels:
         sub = df[df["vintage_label"] == label]
-        intervals = set(zip(sub["date"], sub["hour_ending"]))
+        intervals = set(zip(sub["forecast_date"], sub["hour_ending"]))
         common = intervals if common is None else (common & intervals)
 
     if not common:
         return pd.DataFrame()
 
-    common_df = pd.DataFrame(list(common), columns=["date", "hour_ending"])
-    return df.merge(common_df, on=["date", "hour_ending"], how="inner")
+    common_df = pd.DataFrame(list(common), columns=["forecast_date", "hour_ending"])
+    return df.merge(common_df, on=["forecast_date", "hour_ending"], how="inner")
 
 
 def _empty(text: str) -> str:
@@ -150,9 +213,9 @@ def _empty(text: str) -> str:
 
 def _prep(df: pd.DataFrame) -> pd.DataFrame:
     """Sort and add datetime + display columns for charting."""
-    df = df.sort_values(["date", "hour_ending"]).copy()
-    df["datetime"] = pd.to_datetime(df["date"]) + pd.to_timedelta(df["hour_ending"], unit="h")
-    df["_date_label"] = pd.to_datetime(df["date"]).dt.strftime("%a %b-%d")
+    df = df.sort_values(["forecast_date", "hour_ending"]).copy()
+    df["datetime"] = pd.to_datetime(df["forecast_date"]) + pd.to_timedelta(df["hour_ending"], unit="h")
+    df["_date_label"] = pd.to_datetime(df["forecast_date"]).dt.strftime("%a %b-%d")
     df["_he"] = df["hour_ending"].astype(int)
     return df
 
@@ -190,7 +253,7 @@ def _build_vintage_badges(df: pd.DataFrame, order: list[str]) -> str:
         sub = df[df["vintage_label"] == label]
         if len(sub) == 0:
             continue
-        exec_ts = sub["forecast_execution_datetime"].iloc[0]
+        exec_ts = _display_exec_ts(sub)
         ts_str = exec_ts.strftime("%a %b %d, %H:%M") if pd.notna(exec_ts) else "N/A"
         color = VINTAGE_COLORS.get(label, "#94a3b8")
 
@@ -212,6 +275,20 @@ def _build_vintage_badges(df: pd.DataFrame, order: list[str]) -> str:
         f'{badges}'
         f'</div>'
     )
+
+
+def _display_exec_ts(df: pd.DataFrame):
+    """Execution timestamp used in badges/tables for one vintage."""
+    if (
+        "vintage_anchor_execution_datetime" in df.columns
+        and df["vintage_anchor_execution_datetime"].notna().any()
+    ):
+        return pd.to_datetime(df["vintage_anchor_execution_datetime"]).max()
+
+    if "forecast_execution_datetime" in df.columns and df["forecast_execution_datetime"].notna().any():
+        return pd.to_datetime(df["forecast_execution_datetime"]).max()
+
+    return pd.NaT
 
 
 # ── Overlay chart ────────────────────────────────────────────────────
@@ -264,7 +341,7 @@ def _build_overlay_chart(
         hovermode="x unified",
     )
 
-    dates = sorted(df["date"].dt.date.unique())
+    dates = sorted(df["forecast_date"].dt.date.unique())
     return _assemble_chart(chart_id, fig, dates)
 
 
@@ -279,7 +356,7 @@ def _build_delta_chart(
         return ""
 
     latest_raw = (
-        df[df["vintage_label"] == "Latest"][["date", "hour_ending", "forecast_load_mw"]]
+        df[df["vintage_label"] == "Latest"][["forecast_date", "hour_ending", "forecast_load_mw"]]
         .rename(columns={"forecast_load_mw": "latest_mw"})
     )
 
@@ -293,7 +370,7 @@ def _build_delta_chart(
             continue
 
         sub = df[df["vintage_label"] == label].copy()
-        merged = sub.merge(latest_raw, on=["date", "hour_ending"])
+        merged = sub.merge(latest_raw, on=["forecast_date", "hour_ending"])
         merged["delta"] = merged["forecast_load_mw"] - merged["latest_mw"]
         merged = _prep(merged)
 
@@ -333,7 +410,7 @@ def _build_delta_chart(
         hovermode="x unified",
     )
 
-    dates = sorted(df["date"].dt.date.unique())
+    dates = sorted(df["forecast_date"].dt.date.unique())
     return _assemble_chart(chart_id, fig, dates)
 
 
@@ -352,29 +429,29 @@ def _compute_ramp(df: pd.DataFrame, label: str) -> pd.DataFrame:
     if len(sub) == 0:
         return _prep(sub.assign(ramp_mw=pd.Series(dtype=float)))
 
-    sub["date"] = pd.to_datetime(sub["date"])
+    sub["forecast_date"] = pd.to_datetime(sub["forecast_date"])
     sub["hour_ending"] = pd.to_numeric(sub["hour_ending"], errors="coerce")
     sub["forecast_load_mw"] = pd.to_numeric(sub["forecast_load_mw"], errors="coerce")
-    sub = sub.dropna(subset=["date", "hour_ending"])
+    sub = sub.dropna(subset=["forecast_date", "hour_ending"])
     sub["hour_ending"] = sub["hour_ending"].astype(int)
     sub = sub[sub["hour_ending"].between(1, 24)]
 
     # Keep one value per delivery interval.
     sub = (
-        sub.groupby(["date", "hour_ending"], as_index=False)["forecast_load_mw"]
+        sub.groupby(["forecast_date", "hour_ending"], as_index=False)["forecast_load_mw"]
         .mean()
     )
 
     days: list[pd.DataFrame] = []
-    for dt, day in sub.groupby("date", sort=True):
+    for dt, day in sub.groupby("forecast_date", sort=True):
         day = day.set_index("hour_ending").reindex(range(1, 25))
-        day["date"] = dt
+        day["forecast_date"] = dt
         day["hour_ending"] = day.index
         days.append(day.reset_index(drop=True))
 
     norm = pd.concat(days, ignore_index=True) if days else sub
     norm = _prep(norm)
-    norm["ramp_mw"] = norm.groupby("date")["forecast_load_mw"].diff()
+    norm["ramp_mw"] = norm.groupby("forecast_date")["forecast_load_mw"].diff()
     return norm
 
 
@@ -419,7 +496,7 @@ def _build_ramp_overlay(
         hovermode="x unified",
     )
 
-    dates = sorted(df["date"].dt.date.unique())
+    dates = sorted(df["forecast_date"].dt.date.unique())
     return _assemble_chart(chart_id, fig, dates)
 
 
@@ -433,7 +510,7 @@ def _build_ramp_delta(
     if "Latest" not in order or len(order) < 2:
         return ""
 
-    latest_ramp = _compute_ramp(df, "Latest")[["date", "hour_ending", "ramp_mw", "datetime", "_date_label", "_he"]].rename(
+    latest_ramp = _compute_ramp(df, "Latest")[["forecast_date", "hour_ending", "ramp_mw", "datetime", "_date_label", "_he"]].rename(
         columns={"ramp_mw": "latest_ramp"},
     )
 
@@ -448,9 +525,9 @@ def _build_ramp_delta(
         if len(sub) == 0:
             continue
 
-        merged = sub[["date", "hour_ending", "ramp_mw"]].merge(
-            latest_ramp[["date", "hour_ending", "latest_ramp"]],
-            on=["date", "hour_ending"],
+        merged = sub[["forecast_date", "hour_ending", "ramp_mw"]].merge(
+            latest_ramp[["forecast_date", "hour_ending", "latest_ramp"]],
+            on=["forecast_date", "hour_ending"],
         )
         merged["ramp_delta"] = merged["latest_ramp"] - merged["ramp_mw"]
         merged = _prep(merged)
@@ -480,7 +557,7 @@ def _build_ramp_delta(
         hovermode="x unified",
     )
 
-    dates = sorted(df["date"].dt.date.unique())
+    dates = sorted(df["forecast_date"].dt.date.unique())
     return _assemble_chart(chart_id, fig, dates)
 
 
@@ -562,7 +639,7 @@ def _build_cumulative_ramp(
             continue
 
         # Cumulative ramp within each date (resets at HE1)
-        sub["cum_ramp"] = sub.groupby("date")["ramp_mw"].cumsum()
+        sub["cum_ramp"] = sub.groupby("forecast_date")["ramp_mw"].cumsum()
 
         fig.add_trace(go.Scatter(
             x=sub["datetime"], y=sub["cum_ramp"],
@@ -595,7 +672,7 @@ def _build_cumulative_ramp(
         hovermode="x unified",
     )
 
-    dates = sorted(df["date"].dt.date.unique())
+    dates = sorted(df["forecast_date"].dt.date.unique())
     return _assemble_chart(chart_id, fig, dates)
 
 
@@ -674,7 +751,7 @@ def _build_summary_table(df: pd.DataFrame, order: list[str]) -> str:
     if "Latest" not in order or len(order) < 2:
         return ""
 
-    latest = df[df["vintage_label"] == "Latest"][["date", "hour_ending", "forecast_load_mw"]].rename(
+    latest = df[df["vintage_label"] == "Latest"][["forecast_date", "hour_ending", "forecast_load_mw"]].rename(
         columns={"forecast_load_mw": "latest_mw"},
     )
 
@@ -688,10 +765,10 @@ def _build_summary_table(df: pd.DataFrame, order: list[str]) -> str:
             continue
 
         color = VINTAGE_COLORS.get(label, "#94a3b8")
-        exec_ts = sub["forecast_execution_datetime"].iloc[0]
+        exec_ts = _display_exec_ts(sub)
         exec_str = exec_ts.strftime("%a %b %d, %H:%M") + " EPT" if pd.notna(exec_ts) else "N/A"
 
-        merged = sub.merge(latest, on=["date", "hour_ending"])
+        merged = sub.merge(latest, on=["forecast_date", "hour_ending"])
         merged["delta"] = merged["forecast_load_mw"] - merged["latest_mw"]
         merged["abs_delta"] = merged["delta"].abs()
 
@@ -703,7 +780,7 @@ def _build_summary_table(df: pd.DataFrame, order: list[str]) -> str:
         max_idx = merged["abs_delta"].idxmax()
         max_delta = merged.loc[max_idx, "delta"]
         max_he = int(merged.loc[max_idx, "hour_ending"])
-        max_date = merged.loc[max_idx, "date"]
+        max_date = merged.loc[max_idx, "forecast_date"]
         max_date_str = pd.to_datetime(max_date).strftime("%b %d") if pd.notna(max_date) else ""
 
         rows_html += _summary_row(label, color, exec_str, mae, max_delta, max_he, max_date_str)
@@ -895,3 +972,4 @@ _CHART_TEMPLATE = """
 })();
 </script>
 """
+

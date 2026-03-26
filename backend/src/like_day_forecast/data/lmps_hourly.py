@@ -3,6 +3,7 @@ import pandas as pd
 import logging
 
 from src.like_day_forecast.utils.azure_postgresql import pull_from_db
+from src.like_day_forecast.utils.sql_templates import render_sql_template
 from src.like_day_forecast import configs
 
 logger = logging.getLogger(__name__)
@@ -13,13 +14,18 @@ def pull(
     schema: str = configs.SCHEMA,
     hub: str = configs.HUB,
     market: str = configs.TARGET_MARKET,
+    sql_overrides: dict[str, str | int | bool | None] | None = None,
 ) -> pd.DataFrame:
     """Pull hourly LMP data for a given hub and market."""
     sql_file = SQL_DIR / "lmps_hourly.sql"
-    with open(sql_file, "r") as f:
-        query = f.read()
-
-    query = query.format(schema=schema, hub=hub, market=market)
+    overrides: dict[str, str | int | bool | None] = {
+        "schema": schema,
+        "hub": hub,
+        "market": market,
+    }
+    if sql_overrides:
+        overrides.update(sql_overrides)
+    query = render_sql_template(sql_file, overrides)
     logger.info(f"Pulling LMP hourly: {hub} ({market}) from {schema}")
 
     df = pull_from_db(query=query)

@@ -6,6 +6,7 @@ Source: helioscta.utils.html_utils_single_dashboard
 All content on one page, navigation jumps to sections via anchor links.
 """
 import json
+import re
 from datetime import datetime
 from io import StringIO
 from pathlib import Path
@@ -275,10 +276,11 @@ class HTMLDashboardBuilder:
 
             section_id = self._generate_section_id(name, idx)
             icon_html = f'<span class="nav-icon">{icon}</span>' if icon else ''
+            display_name = re.sub(r' - (?:Composite )?Vintage .+$', '', name)
             sidebar_html += f'''
             <a href="#{section_id}" class="nav-item" data-section-id="{section_id}">
                 {icon_html}
-                <span>{name}</span>
+                <span>{display_name}</span>
             </a>
             '''
 
@@ -295,9 +297,13 @@ class HTMLDashboardBuilder:
                 continue
 
             section_id = self._generate_section_id(name, idx)
+            display_name = re.sub(r' - (?:Composite )?Vintage .+$', '', name)
             content_html += f'''
             <section id="{section_id}" class="content-section">
-                <div class="section-header">{name}</div>
+                <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+                    <span>{display_name}</span>
+                    <span class="section-chevron">&#9662;</span>
+                </div>
                 <div class="section-content">{content}</div>
             </section>
             '''
@@ -528,6 +534,35 @@ class HTMLDashboardBuilder:
             position: sticky;
             top: 0;
             z-index: 10;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }}
+
+        .section-header:hover {{
+            background: {c['section_header_bg']};
+            filter: brightness(1.15);
+        }}
+
+        .section-chevron {{
+            font-size: 12px;
+            color: #6f8db1;
+            transition: transform 0.2s ease;
+            margin-left: 8px;
+        }}
+
+        .content-section.collapsed .section-content {{
+            display: none;
+        }}
+
+        .content-section.collapsed .section-header {{
+            border-bottom: none;
+        }}
+
+        .content-section.collapsed .section-chevron {{
+            transform: rotate(-90deg);
         }}
 
         .section-content {{
@@ -585,7 +620,7 @@ class HTMLDashboardBuilder:
         ::-webkit-scrollbar-thumb {{ background: {c['scrollbar_thumb']}; border-radius: 4px; }}
         ::-webkit-scrollbar-thumb:hover {{ background: {c['scrollbar_thumb_hover']}; }}
     </style>
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-3.4.0.min.js"></script>
 </head>
 <body>
     {header_html}

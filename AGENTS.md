@@ -29,3 +29,4 @@
 ## Agent References
 - Frontend theme/style preferences: [`.claude/standards/frontend-styling.md`](./.claude/standards/frontend-styling.md).
 - Backend data reference: [`.claude/standards/backend-repo-for-data.md`](./.claude/standards/backend-repo-for-data.md).
+- Like-day SQL parameter standard: [`.claude/standards/sql-parameter-standard.md`](./.claude/standards/sql-parameter-standard.md).

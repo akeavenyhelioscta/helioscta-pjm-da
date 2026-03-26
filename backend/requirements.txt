@@ -1,3 +1,6 @@
+# azure
+azure-storage-blob>=12.19.0
+
 # db
 psycopg2-binary==2.9.10
 pyodbc

@@ -78,7 +78,7 @@ def run_strip(
 
     # 1. Build daily feature matrix (once)
     logger.info("Building daily feature matrix...")
-    df_features = build_daily_features(schema=config.schema)
+    df_features = build_daily_features(schema=config.schema, hub=config.hub)
 
     available_dates = sorted(df_features["date"].unique())
     logger.info(f"Feature matrix: {len(available_dates):,} days "

@@ -13,9 +13,12 @@ from zoneinfo import ZoneInfo
 # Add new entries here when new fragments are registered.
 
 REPORT_GROUPS: dict[str, tuple[str, str]] = {
+    "forecast_results": ("DA Model", "Like Day Model"),
     "rt_load_metered_rto": ("Input Validation", "RT Load Metered RTO"),
     "load_forecast_rto": ("Load Forecasts", "Load Forecasts RTO"),
-    "forecast_evolution": ("Load Forecasts", "Load Forecast Changes RTO (PJM + Meteologica)"),
+    "forecast_evolution": ("Load Forecasts", "Load Forecast Changes RTO"),
+    "fuel_mix": ("Fuel Mix", "Fuel Mix"),
+    "meteo_vintage_table": ("Load Forecasts", "Meteologica Vintage Table"),
     # "lmp":   ("Input Validation", "LMP Data"),
     # "gas":   ("Input Validation", "Gas Prices"),
 }
@@ -24,7 +27,7 @@ REPORT_GROUPS: dict[str, tuple[str, str]] = {
 def build_master(
     reports: dict[str, Path],
     output_dir: Path,
-    title: str = "Like-Day Forecast Reports",
+    title: str = "DA Model",
 ) -> Path:
     """Build a master HTML that navigates between sub-reports via iframe.
 

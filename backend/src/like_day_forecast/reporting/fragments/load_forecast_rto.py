@@ -50,9 +50,9 @@ def build_fragments(
         force_refresh=force_refresh,
     )
 
-    df_meteo = _safe_pull("meteologica_load_strip",
+    df_meteo = _safe_pull("meteologica_load_strip_v2_current_hour_filter",
                           meteologica_load_forecast_hourly.pull_strip, {}, **cache_kwargs)
-    df_euro = _safe_pull("meteologica_euro_ens_strip",
+    df_euro = _safe_pull("meteologica_euro_ens_strip_v2_current_hour_filter",
                          meteologica_euro_ens_forecast.pull_strip, {}, **cache_kwargs)
     df_pjm = _safe_pull("pjm_load_strip",
                          pjm_load_forecast_hourly.pull_strip, {}, **cache_kwargs)
@@ -94,7 +94,7 @@ def _safe_pull(source_name, pull_fn, pull_kwargs, **cache_kwargs):
     try:
         df = pull_with_cache(source_name=source_name, pull_fn=pull_fn,
                              pull_kwargs=pull_kwargs, **cache_kwargs)
-        df["date"] = pd.to_datetime(df["date"])
+        df["forecast_date"] = pd.to_datetime(df["forecast_date"])
         return df
     except Exception as e:
         logger.warning(f"{source_name} pull failed: {e}")
@@ -103,9 +103,20 @@ def _safe_pull(source_name, pull_fn, pull_kwargs, **cache_kwargs):
 
 def _vintage_label(df):
     if "forecast_execution_datetime" in df.columns:
-        dt = pd.to_datetime(df["forecast_execution_datetime"].iloc[0])
-        return f" — Vintage {dt.strftime('%m/%d/%Y, %I:%M %p')}"
+        exec_ts = pd.to_datetime(df["forecast_execution_datetime"], errors="coerce").dropna()
+        if len(exec_ts) == 0:
+            return ""
+
+        dt_min = exec_ts.min()
+        dt_max = exec_ts.max()
+        if dt_min == dt_max:
+            return f" - Vintage {dt_max.strftime('%m/%d/%Y, %I:%M %p')}"
+        return (
+            f" - Composite Vintage {dt_min.strftime('%m/%d/%Y, %I:%M %p')}"
+            f" to {dt_max.strftime('%m/%d/%Y, %I:%M %p')}"
+        )
     return ""
+
 
 
 def _empty(text):
@@ -114,9 +125,9 @@ def _empty(text):
 
 def _prep(df):
     """Sort and add datetime + customdata columns."""
-    df = df.sort_values(["date", "hour_ending"]).copy()
-    df["datetime"] = df["date"] + pd.to_timedelta(df["hour_ending"], unit="h")
-    df["_date_label"] = df["date"].dt.strftime("%a %b-%d")
+    df = df.sort_values(["forecast_date", "hour_ending"]).copy()
+    df["datetime"] = df["forecast_date"] + pd.to_timedelta(df["hour_ending"], unit="h")
+    df["_date_label"] = df["forecast_date"].dt.strftime("%a %b-%d")
     df["_he"] = df["hour_ending"].astype(int)
     return df
 
@@ -256,7 +267,7 @@ def _build_overlay_chart(chart_id, df_meteo, df_pjm, df_euro):
     _apply_layout(fig, "PJM vs Meteologica RTO — Load", y2_title="Diff (MW)")
 
     # Use union of dates for buttons
-    all_dates = sorted(set(df_meteo["date"].dt.date.unique()) | set(df_pjm["date"].dt.date.unique()))
+    all_dates = sorted(set(df_meteo["forecast_date"].dt.date.unique()) | set(df_pjm["forecast_date"].dt.date.unique()))
     return _assemble(chart_id, fig, df_meteo, ramp_idx,
                      dates_override=all_dates, toggle_label="DIFF")
 
@@ -285,7 +296,7 @@ def _assemble(chart_id, fig, df_dates, ramp_idx, dates_override=None, toggle_lab
     """Serialize figure + build date buttons + return HTML."""
     fig_json = pio.to_json(fig)
 
-    dates = dates_override or sorted(df_dates["date"].dt.date.unique())
+    dates = dates_override or sorted(df_dates["forecast_date"].dt.date.unique())
     btn_html = (
         f'<button class="fc-btn fc-btn-{chart_id} fc-active" '
         f"onclick=\"fcFilter('{chart_id}',this,'all')\">All</button>\n"

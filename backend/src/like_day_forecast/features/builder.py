@@ -5,8 +5,10 @@ Produces one row per date with all features needed for similarity matching.
 import pandas as pd
 import numpy as np
 import logging
+from pathlib import Path
 
 from src.like_day_forecast import configs
+from src.like_day_forecast.utils.cache_utils import pull_with_cache
 from src.like_day_forecast.data import (
     lmps_hourly,
     load_rt_metered_hourly,
@@ -37,62 +39,124 @@ logger = logging.getLogger(__name__)
 
 def build_daily_features(
     schema: str = configs.SCHEMA,
+    hub: str = configs.HUB,
+    cache_dir: Path | None = configs.CACHE_DIR,
+    cache_enabled: bool = configs.CACHE_ENABLED,
+    cache_ttl_hours: float = configs.CACHE_TTL_HOURS,
+    force_refresh: bool = configs.FORCE_CACHE_REFRESH,
 ) -> pd.DataFrame:
     """Pull all data and build the daily feature matrix for similarity matching.
 
     Returns:
         DataFrame with one row per date, containing all feature columns.
     """
-    logger.info(f"Building daily similarity features from schema '{schema}'")
+    logger.info(f"Building daily similarity features from schema '{schema}' for hub '{hub}'")
 
-    # --- 1. Pull data ---
-    logger.info("Pulling DA LMP data (Western Hub)...")
-    df_lmp_da = lmps_hourly.pull(schema=schema, hub=configs.HUB, market="da")
+    cache_kwargs = dict(
+        cache_dir=cache_dir,
+        cache_enabled=cache_enabled,
+        ttl_hours=cache_ttl_hours,
+        force_refresh=force_refresh,
+    )
 
-    logger.info("Pulling RT LMP data (Western Hub)...")
-    df_lmp_rt = lmps_hourly.pull(schema=schema, hub=configs.HUB, market="rt")
+    # --- 1. Pull data (cached) ---
+    logger.info(f"Pulling DA LMP data ({hub})...")
+    df_lmp_da = pull_with_cache(
+        source_name="lmps_hourly_da",
+        pull_fn=lmps_hourly.pull,
+        pull_kwargs={"schema": schema, "hub": hub, "market": "da"},
+        **cache_kwargs,
+    )
+
+    logger.info(f"Pulling RT LMP data ({hub})...")
+    df_lmp_rt = pull_with_cache(
+        source_name="lmps_hourly_rt",
+        pull_fn=lmps_hourly.pull,
+        pull_kwargs={"schema": schema, "hub": hub, "market": "rt"},
+        **cache_kwargs,
+    )
 
     logger.info("Pulling gas prices...")
-    df_gas = gas_prices.pull()
+    df_gas = pull_with_cache(
+        source_name="gas_prices",
+        pull_fn=gas_prices.pull,
+        pull_kwargs={},
+        **cache_kwargs,
+    )
 
     logger.info("Pulling calendar data...")
-    df_dates = dates.pull_daily(schema=schema)
+    df_dates = pull_with_cache(
+        source_name="dates_daily",
+        pull_fn=dates.pull_daily,
+        pull_kwargs={"schema": schema},
+        **cache_kwargs,
+    )
 
     logger.info("Pulling RT metered load...")
-    df_rt_load = load_rt_metered_hourly.pull(schema=schema)
+    df_rt_load = pull_with_cache(
+        source_name="load_rt_metered_hourly",
+        pull_fn=load_rt_metered_hourly.pull,
+        pull_kwargs={"schema": schema},
+        **cache_kwargs,
+    )
 
     logger.info("Pulling observed weather (PJM aggregate)...")
     df_weather = None
     try:
-        df_weather = weather_hourly.pull()
+        df_weather = pull_with_cache(
+            source_name="weather_hourly",
+            pull_fn=weather_hourly.pull,
+            pull_kwargs={},
+            **cache_kwargs,
+        )
     except Exception as e:
         logger.warning(f"Weather pull failed (may not be available): {e}")
 
     logger.info("Pulling fuel mix (actual solar/wind generation)...")
     df_fuel_mix = None
     try:
-        df_fuel_mix = fuel_mix_hourly.pull()
+        df_fuel_mix = pull_with_cache(
+            source_name="fuel_mix_hourly",
+            pull_fn=fuel_mix_hourly.pull,
+            pull_kwargs={},
+            **cache_kwargs,
+        )
     except Exception as e:
         logger.warning(f"Fuel mix pull failed: {e}")
 
     logger.info("Pulling outages actual daily...")
     df_outages = None
     try:
-        df_outages = outages_actual_daily.pull(schema=schema)
+        df_outages = pull_with_cache(
+            source_name="outages_actual_daily",
+            pull_fn=outages_actual_daily.pull,
+            pull_kwargs={"schema": schema},
+            **cache_kwargs,
+        )
     except Exception as e:
         logger.warning(f"Outages pull failed: {e}")
 
     logger.info("Pulling D+1 solar forecast...")
     df_solar_forecast = None
     try:
-        df_solar_forecast = solar_forecast_hourly.pull()
+        df_solar_forecast = pull_with_cache(
+            source_name="solar_forecast_hourly",
+            pull_fn=solar_forecast_hourly.pull,
+            pull_kwargs={},
+            **cache_kwargs,
+        )
     except Exception as e:
         logger.warning(f"Solar forecast pull failed: {e}")
 
     logger.info("Pulling D+1 wind forecast...")
     df_wind_forecast = None
     try:
-        df_wind_forecast = wind_forecast_hourly.pull()
+        df_wind_forecast = pull_with_cache(
+            source_name="wind_forecast_hourly",
+            pull_fn=wind_forecast_hourly.pull,
+            pull_kwargs={},
+            **cache_kwargs,
+        )
     except Exception as e:
         logger.warning(f"Wind forecast pull failed: {e}")
 
