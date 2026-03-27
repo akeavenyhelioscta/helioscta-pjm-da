@@ -30,10 +30,18 @@ from src.like_day_forecast.utils.html_dashboard import HTMLDashboardBuilder
 from src.like_day_forecast.utils.logging_utils import get_pipeline_logger
 from src.like_day_forecast.reporting.fragments import rt_load_metered_rto as rt_load_metered_rto_fragments
 from src.like_day_forecast.reporting.fragments import load_forecast_rto as load_forecast_rto_fragments
+from src.like_day_forecast.reporting.fragments import load_forecast_pjm_regional as load_forecast_pjm_regional_fragments
+from src.like_day_forecast.reporting.fragments import load_forecast_meteologica_regional as load_forecast_meteologica_regional_fragments
+from src.like_day_forecast.reporting.fragments import load_forecast_diff_regional as load_forecast_diff_regional_fragments
+from src.like_day_forecast.reporting.fragments import load_forecast_vintage_combined as load_forecast_vintage_combined_fragments
 from src.like_day_forecast.reporting.fragments import load_forecast_changes_rto as load_forecast_changes_rto_fragments
 from src.like_day_forecast.reporting.fragments import forecast_results as forecast_results_fragments
 from src.like_day_forecast.reporting.fragments import fuel_mix as fuel_mix_fragments
+from src.like_day_forecast.reporting.fragments import lmp_history as lmp_history_fragments
 from src.like_day_forecast.reporting.fragments import meteologica_vintage_table as meteo_vintage_table_fragments
+from src.like_day_forecast.reporting.fragments import outages_forecast_rto as outages_forecast_rto_fragments
+from src.like_day_forecast.reporting.fragments import outages_term_bible as outages_term_bible_fragments
+from src.like_day_forecast.reporting.fragments import outages_seasonal as outages_seasonal_fragments
 from src.like_day_forecast.reporting.master_report import build_master
 from src.utils.azure_blob_storage_utils import AzureBlobStorageClient
 
@@ -48,9 +56,17 @@ FRAGMENT_REGISTRY = {
     "forecast_results": ("Like Day Model", forecast_results_fragments.build_fragments),
     "rt_load_metered_rto": ("RT Load Metered RTO", rt_load_metered_rto_fragments.build_fragments),
     "load_forecast_rto": ("Load Forecasts RTO", load_forecast_rto_fragments.build_fragments),
+    "load_forecast_pjm_regional": ("PJM Regional Load Forecasts", load_forecast_pjm_regional_fragments.build_fragments),
+    "load_forecast_meteologica_regional": ("Meteologica Regional Load Forecasts", load_forecast_meteologica_regional_fragments.build_fragments),
+    "load_forecast_diff_regional": ("PJM vs Meteologica Regional", load_forecast_diff_regional_fragments.build_fragments),
+    "load_forecast_vintage_combined": ("Load Forecast Vintages", load_forecast_vintage_combined_fragments.build_fragments),
     "forecast_evolution": ("Load Forecast Changes RTO", load_forecast_changes_rto_fragments.build_fragments),
     "fuel_mix": ("Fuel Mix", fuel_mix_fragments.build_fragments),
+    "lmp_history": ("LMP History", lmp_history_fragments.build_fragments),
     "meteo_vintage_table": ("Meteologica Vintage Table", meteo_vintage_table_fragments.build_fragments),
+    "outages_forecast_rto": ("Forecast Outages RTO", outages_forecast_rto_fragments.build_fragments),
+    "outages_term_bible": ("Outages Term Bible", outages_term_bible_fragments.build_fragments),
+    "outages_seasonal": ("Seasonal Outages RTO", outages_seasonal_fragments.build_fragments),
     # "lmp": ("LMP Data", lmp_fragments.build_fragments),
     # "gas": ("Gas Prices", gas_fragments.build_fragments),
     # "weather": ("Weather", weather_fragments.build_fragments),

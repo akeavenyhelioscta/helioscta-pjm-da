@@ -18,7 +18,11 @@ REPORT_GROUPS: dict[str, tuple[str, str]] = {
     "load_forecast_rto": ("Load Forecasts", "Load Forecasts RTO"),
     "forecast_evolution": ("Load Forecasts", "Load Forecast Changes RTO"),
     "fuel_mix": ("Fuel Mix", "Fuel Mix"),
+    "lmp_history": ("Input Validation", "LMP History"),
     "meteo_vintage_table": ("Load Forecasts", "Meteologica Vintage Table"),
+    "outages_forecast_rto": ("Outages", "Forecast Outages RTO"),
+    "outages_term_bible": ("Outages", "Term Bible"),
+    "outages_seasonal": ("Outages", "Seasonal Outages RTO"),
     # "lmp":   ("Input Validation", "LMP Data"),
     # "gas":   ("Input Validation", "Gas Prices"),
 }
