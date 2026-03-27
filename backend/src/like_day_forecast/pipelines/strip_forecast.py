@@ -16,7 +16,7 @@ from tabulate import tabulate
 from src.like_day_forecast import configs
 from src.like_day_forecast.features.builder import build_daily_features
 from src.like_day_forecast.similarity.engine import find_analogs
-from src.like_day_forecast.data import lmps_hourly
+from src.data import lmps_hourly
 from src.like_day_forecast.pipelines.forecast import (
     weighted_quantile,
     _add_summary_cols,

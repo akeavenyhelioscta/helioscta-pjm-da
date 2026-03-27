@@ -10,7 +10,9 @@ from pathlib import Path
 SCHEMA: str = "pjm_cleaned"
 
 # ── Cache ────────────────────────────────────────────────────────────
-CACHE_DIR: Path = Path(__file__).parent / "cache"
+_BACKEND_ROOT: Path = Path(__file__).resolve().parent.parent.parent  # backend/
+_DEFAULT_CACHE_DIR: Path = _BACKEND_ROOT / "cache"
+CACHE_DIR: Path = Path(os.getenv("CACHE_DIR", str(_DEFAULT_CACHE_DIR)))
 CACHE_ENABLED: bool = os.getenv("CACHE_ENABLED", "true").lower() in ("true", "1", "yes")
 CACHE_TTL_HOURS: float = float(os.getenv("CACHE_TTL_HOURS", "4"))
 FORCE_CACHE_REFRESH: bool = os.getenv("FORCE_CACHE_REFRESH", "false").lower() in ("true", "1", "yes")

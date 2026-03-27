@@ -30,3 +30,26 @@
 - Frontend theme/style preferences: [`.claude/standards/frontend-styling.md`](./.claude/standards/frontend-styling.md).
 - Backend data reference: [`.claude/standards/backend-repo-for-data.md`](./.claude/standards/backend-repo-for-data.md).
 - Like-day SQL parameter standard: [`.claude/standards/sql-parameter-standard.md`](./.claude/standards/sql-parameter-standard.md).
+
+## View Model API
+
+The like-day forecast backend exposes structured view models via FastAPI.
+Start the server: `cd backend && uvicorn src.api.main:app --reload --port 8000`
+
+### Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Cache status and dataset count |
+| `/views/forecast_results` | GET | Like-day DA LMP forecast with hourly data, quantile bands, period summaries, and evaluation metrics |
+| `/views/outage_term_bible` | GET | Historical outage context: current level, seasonal percentile/z-score, YoY comparison, 7-day trend, decomposition by type |
+
+### Query parameters
+- `/views/forecast_results?forecast_date=YYYY-MM-DD` — override forecast target date (defaults to tomorrow)
+
+### How to use as an agent
+1. Query `/views/forecast_results` for the current forecast — read `hourly[].forecast`, `summary`, `quantile_coverage`, and `metrics`
+2. Query `/views/outage_term_bible` for supply context — read `outage_types.total_outages.month_context.percentile` and `trend_7d`
+3. Cross-reference: if outages are elevated (high percentile) and the forecast shows wide quantile bands at peak hours, flag the risk
+4. The view models provide **structured facts only** — the agent does the interpretation (e.g., "97th percentile outages + Saturday = possible over-forecast on peak hours")
+5. Full OpenAPI spec available at `/openapi.json`

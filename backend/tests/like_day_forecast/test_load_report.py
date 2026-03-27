@@ -45,7 +45,7 @@ class TestRunChecks:
     """Tests for _run_checks."""
 
     def test_all_checks_pass_clean_data(self, df_rt_raw, df_da_raw):
-        from src.like_day_forecast.reporting.fragments.load import _run_checks
+        from src.reporting.fragments.load import _run_checks
         from src.like_day_forecast.features import load_features
 
         df_rt = df_rt_raw.copy()
@@ -67,7 +67,7 @@ class TestRunChecks:
         assert "RT zero nulls" in names
 
     def test_detects_nulls(self, df_rt_raw):
-        from src.like_day_forecast.reporting.fragments.load import _run_checks
+        from src.reporting.fragments.load import _run_checks
         from src.like_day_forecast.features import load_features
 
         df_rt = df_rt_raw.copy()
@@ -87,14 +87,14 @@ class TestFormatChecksHtml:
     """Tests for _format_checks_html."""
 
     def test_all_pass(self):
-        from src.like_day_forecast.reporting.fragments.load import _format_checks_html
+        from src.reporting.fragments.load import _format_checks_html
 
         html = _format_checks_html([("check_a", True), ("check_b", True)])
         assert "ALL CHECKS PASSED" in html
         assert "PASS" in html
 
     def test_some_fail(self):
-        from src.like_day_forecast.reporting.fragments.load import _format_checks_html
+        from src.reporting.fragments.load import _format_checks_html
 
         html = _format_checks_html([("ok", True), ("bad", False)])
         assert "SOME CHECKS FAILED" in html
@@ -104,13 +104,13 @@ class TestFormatChecksHtml:
 class TestBuildFragments:
     """Integration test: mock data pulls, verify fragment structure."""
 
-    @patch("src.like_day_forecast.reporting.fragments.load.load_da_hourly")
-    @patch("src.like_day_forecast.reporting.fragments.load.load_rt_metered_hourly")
+    @patch("src.reporting.fragments.load.load_da_hourly")
+    @patch("src.reporting.fragments.load.load_rt_metered_hourly")
     def test_returns_sections_and_dividers(self, mock_rt, mock_da, df_rt_raw, df_da_raw):
         mock_rt.pull.return_value = df_rt_raw
         mock_da.pull.return_value = df_da_raw
 
-        from src.like_day_forecast.reporting.fragments.load import build_fragments
+        from src.reporting.fragments.load import build_fragments
 
         fragments = build_fragments()
 
@@ -126,13 +126,13 @@ class TestBuildFragments:
             assert isinstance(name, str)
             assert content is not None
 
-    @patch("src.like_day_forecast.reporting.fragments.load.load_da_hourly")
-    @patch("src.like_day_forecast.reporting.fragments.load.load_rt_metered_hourly")
+    @patch("src.reporting.fragments.load.load_da_hourly")
+    @patch("src.reporting.fragments.load.load_rt_metered_hourly")
     def test_works_without_da(self, mock_rt, mock_da, df_rt_raw):
         mock_rt.pull.return_value = df_rt_raw
         mock_da.pull.side_effect = Exception("DA not available")
 
-        from src.like_day_forecast.reporting.fragments.load import build_fragments
+        from src.reporting.fragments.load import build_fragments
 
         fragments = build_fragments()
         sections = [f for f in fragments if isinstance(f, tuple)]
@@ -146,14 +146,14 @@ class TestBuildFragments:
 class TestFullRender:
     """End-to-end: mock pulls -> fragments -> HTMLDashboardBuilder -> HTML."""
 
-    @patch("src.like_day_forecast.reporting.fragments.load.load_da_hourly")
-    @patch("src.like_day_forecast.reporting.fragments.load.load_rt_metered_hourly")
+    @patch("src.reporting.fragments.load.load_da_hourly")
+    @patch("src.reporting.fragments.load.load_rt_metered_hourly")
     def test_produces_valid_html(self, mock_rt, mock_da, df_rt_raw, df_da_raw):
         mock_rt.pull.return_value = df_rt_raw
         mock_da.pull.return_value = df_da_raw
 
-        from src.like_day_forecast.reporting.fragments.load import build_fragments
-        from src.like_day_forecast.utils.html_dashboard import HTMLDashboardBuilder
+        from src.reporting.fragments.load import build_fragments
+        from src.reporting.html_dashboard import HTMLDashboardBuilder
 
         builder = HTMLDashboardBuilder(title="Test Report", theme="dark")
         for item in build_fragments():

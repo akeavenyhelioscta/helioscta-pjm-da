@@ -17,9 +17,9 @@ from tabulate import tabulate
 from src.like_day_forecast import configs
 from src.like_day_forecast.features.builder import build_daily_features
 from src.like_day_forecast.similarity.engine import find_analogs
-from src.like_day_forecast.data import lmps_hourly
+from src.data import lmps_hourly
 from src.like_day_forecast.evaluation.metrics import evaluate_forecast
-from src.like_day_forecast.utils.cache_utils import pull_with_cache
+from src.utils.cache_utils import pull_with_cache
 
 logger = logging.getLogger(__name__)
 

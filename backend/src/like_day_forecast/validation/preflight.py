@@ -408,7 +408,7 @@ def run_preflight(
     Returns:
         PreflightResult with pass/fail status and details.
     """
-    from src.like_day_forecast.data import (
+    from src.data import (
         lmps_hourly,
         load_da_hourly,
         load_rt_metered_hourly,

@@ -5,7 +5,7 @@ import pandas as pd
 from tabulate import tabulate
 
 from src.like_day_forecast import configs
-from src.like_day_forecast.data import lmps
+from src.data import lmps
 from src.like_day_forecast.like_day import find_like_days
 
 import logging

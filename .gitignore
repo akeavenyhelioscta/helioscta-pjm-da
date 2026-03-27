@@ -40,6 +40,7 @@ wandb/
 **/reporting/output/
 
 # Data cache (parquet + metadata)
+backend/cache/
 **/like_day_forecast/cache/
 
 # misc files
