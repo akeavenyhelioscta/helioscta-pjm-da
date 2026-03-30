@@ -269,9 +269,9 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     df = pull_with_cache(
-        source_name="outages_actual_daily_history",
+        source_name="outages_actual_daily",
         pull_fn=outages_actual_daily.pull,
-        pull_kwargs={"sql_overrides": {"start_date": "2023-01-01"}},
+        pull_kwargs={"schema": configs.SCHEMA},
         cache_dir=configs.CACHE_DIR,
         cache_enabled=configs.CACHE_ENABLED,
         ttl_hours=configs.CACHE_TTL_HOURS,

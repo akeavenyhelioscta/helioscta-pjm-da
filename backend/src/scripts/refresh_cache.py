@@ -28,24 +28,18 @@ from src.data import (
     gas_prices,
     lmps_hourly,
     load_rt_metered_hourly,
+    meteologica_da_price_forecast,
     meteologica_euro_ens_forecast,
-    meteologica_load_forecast_hourly,
     outages_actual_daily,
     outages_forecast_daily,
-    pjm_load_forecast_hourly,
     solar_forecast_hourly,
+    tie_flows_hourly,
     weather_hourly,
     wind_forecast_hourly,
 )
-from src.reporting.fragments.load_forecast_vintage_combined import (
-    _pull_source_vintages as _pull_combined_source_vintages,
-)
-from src.reporting.fragments.load_forecast_changes_rto import (
-    _pull_source_vintages as _pull_changes_source_vintages,
-)
-from src.reporting.fragments.meteologica_vintage_table import (
-    _pull_vintages as _pull_meteologica_vintages_table,
-)
+from src.data.load_forecast_vintages import pull_combined_vintages as _pull_combined_vintages
+from src.data.solar_forecast_vintages import pull_combined_vintages as _pull_solar_combined
+from src.data.wind_forecast_vintages import pull_combined_vintages as _pull_wind_combined
 
 logger = logging.getLogger(__name__)
 
@@ -57,49 +51,25 @@ logger = logging.getLogger(__name__)
 REGIONS = ["RTO", "WEST", "MIDATL", "SOUTH"]
 
 SOURCE_REGISTRY: list[tuple[str, callable, dict]] = [
-    # Feature builder sources
-    ("lmps_hourly_da", lmps_hourly.pull, {"schema": configs.SCHEMA, "hub": configs.HUB, "market": "da"}),
-    ("lmps_hourly_rt", lmps_hourly.pull, {"schema": configs.SCHEMA, "hub": configs.HUB, "market": "rt"}),
-    ("gas_prices", gas_prices.pull, {}),
     ("dates_daily", dates.pull_daily, {"schema": configs.SCHEMA}),
-    ("load_rt_metered_hourly", load_rt_metered_hourly.pull, {"schema": configs.SCHEMA}),
-    ("weather_hourly", weather_hourly.pull, {}),
+    ("forecast_vintage_meteologica", _pull_combined_vintages, {"source": "meteologica"}),
+    ("forecast_vintage_pjm", _pull_combined_vintages, {"source": "pjm"}),
     ("fuel_mix_hourly", fuel_mix_hourly.pull, {}),
+    ("gas_prices", gas_prices.pull, {}),
+    ("lmps_hourly_da", lmps_hourly.pull, {"schema": configs.SCHEMA, "market": "da"}),
+    ("lmps_hourly_rt", lmps_hourly.pull, {"schema": configs.SCHEMA, "market": "rt"}),
+    ("load_rt_metered_hourly", load_rt_metered_hourly.pull, {}),
+    ("meteologica_da_price_forecast", meteologica_da_price_forecast.pull, {}),
+    ("meteologica_da_price_vintage", meteologica_da_price_forecast.pull_da_cutoff_vintages, {}),
+    ("meteologica_euro_ens", meteologica_euro_ens_forecast.pull_strip_all_regions, {}),
     ("outages_actual_daily", outages_actual_daily.pull, {"schema": configs.SCHEMA}),
-    ("solar_forecast_hourly", solar_forecast_hourly.pull, {}),
-    ("wind_forecast_hourly", wind_forecast_hourly.pull, {}),
-
-    # rt_load_metered_rto fragment
-    ("load_rt_metered_hourly", load_rt_metered_hourly.pull, {"schema": configs.SCHEMA, "region": configs.LOAD_REGION}),
-
-    # Outage fragments + API/view callsites
     ("outages_forecast_daily", outages_forecast_daily.pull, {"lookback_days": 14}),
-    ("outages_actual_daily_history", outages_actual_daily.pull, {"sql_overrides": {"start_date": "2023-01-01"}}),
-
-    # load_forecast_rto + regional forecast fragments
-    ("pjm_load_strip", pjm_load_forecast_hourly.pull_strip, {}),
-    ("meteologica_load_strip_v2_current_hour_filter", meteologica_load_forecast_hourly.pull_strip, {}),
-    ("meteologica_euro_ens_strip_v2_current_hour_filter", meteologica_euro_ens_forecast.pull_strip, {}),
-    *[(f"pjm_load_strip_{r.lower()}", pjm_load_forecast_hourly.pull_strip, {"region": r})
-      for r in ["WEST", "MIDATL", "SOUTH"]],
-    *[(f"meteologica_load_strip_v2_current_hour_filter_{r.lower()}", meteologica_load_forecast_hourly.pull_strip, {"region": r})
-      for r in ["WEST", "MIDATL", "SOUTH"]],
-    *[(f"meteologica_euro_ens_strip_v2_current_hour_filter_{r.lower()}", meteologica_euro_ens_forecast.pull_strip, {"region": r})
-      for r in ["WEST", "MIDATL", "SOUTH"]],
-
-    # load_forecast_vintage_combined fragment
-    *[(f"forecast_vintage_{src}_{r.lower()}", _pull_combined_source_vintages, {"source": src, "region": r})
-      for src in ("pjm", "meteologica") for r in REGIONS],
-    *[(f"meteologica_euro_ens_vintage_{r.lower()}", meteologica_euro_ens_forecast.pull_strip, {"region": r})
-      for r in REGIONS],
-
-    # load_forecast_changes_rto fragment
-    ("forecast_evolution_pjm_latest_da_cutoff_v2", _pull_changes_source_vintages, {"source": "pjm", "region": "RTO"}),
-    ("forecast_evolution_meteologica_latest_da_cutoff_v2", _pull_changes_source_vintages, {"source": "meteologica", "region": "RTO"}),
-
-    # meteologica_vintage_table fragment
-    ("meteo_vintage_table_v1", _pull_meteologica_vintages_table, {}),
-
+    ("solar_forecast_hourly", solar_forecast_hourly.pull, {}),
+    ("solar_vintage_combined", _pull_solar_combined, {}),
+    ("tie_flows_hourly", tie_flows_hourly.pull, {}),
+    ("weather_hourly", weather_hourly.pull, {}),
+    ("wind_forecast_hourly", wind_forecast_hourly.pull, {}),
+    ("wind_vintage_combined", _pull_wind_combined, {}),
 ]
 
 

@@ -1,8 +1,10 @@
 """Multi-day strip forecast — predict DA LMP for D+1 through D+N.
 
-Uses a single reference date (today) for analog matching, then collects each
-analog's day+1, day+2, ... day+N actual DA LMP profiles to build independent
-forecasts per horizon date.
+Uses per-day analog selection with synthetic reference rows: each target day
+gets its own set of analogs matched to a reference row that reflects the
+correct DOW, target weather, renewables, and outage forecasts.  Analog D+1
+LMP profiles are always used (offset=1), eliminating the stale-offset drift
+of the original approach.
 
 Output: one forecast row per date, stacked into a strip table.
 """
@@ -14,15 +16,19 @@ import pandas as pd
 from tabulate import tabulate
 
 from src.like_day_forecast import configs
-from src.like_day_forecast.features.builder import build_daily_features
+from src.like_day_forecast.features.builder import (
+    build_daily_features,
+    build_synthetic_reference_row,
+)
 from src.like_day_forecast.similarity.engine import find_analogs
-from src.data import lmps_hourly
+from src.data import lmps_hourly, weather_hourly, pjm_solar_forecast_hourly, pjm_wind_forecast_hourly, outages_forecast_daily
 from src.like_day_forecast.pipelines.forecast import (
     weighted_quantile,
     _add_summary_cols,
     ONPEAK_HOURS,
     OFFPEAK_HOURS,
 )
+from src.utils.cache_utils import pull_with_cache
 
 logger = logging.getLogger(__name__)
 
@@ -35,26 +41,30 @@ def run_strip(
     n_analogs: int = configs.DEFAULT_N_ANALOGS,
     weight_method: str = "inverse_distance",
     config: configs.ScenarioConfig | None = None,
+    cache_dir=configs.CACHE_DIR,
+    cache_enabled=configs.CACHE_ENABLED,
+    cache_ttl_hours=configs.CACHE_TTL_HOURS,
+    force_refresh=configs.FORCE_CACHE_REFRESH,
 ) -> dict:
-    """Run a multi-day strip forecast from a single set of analogs.
+    """Run a multi-day strip forecast with per-day analog selection.
 
-    Approach:
-    1. Build daily feature matrix once
-    2. Find analogs for the reference date (defaults to today)
-    3. For each horizon day offset (1..N), collect each analog's day+offset
-       actual DA LMP profile and build a weighted probabilistic forecast
-    4. Stack all days into a combined strip table
+    For each target day:
+      1. Build a synthetic reference row (today's features + correct calendar
+         + correct target-date forecasts)
+      2. Find independent analogs against the synthetic reference
+      3. Collect each analog's *next-day* (D+1) actual DA LMP profile
+      4. Build a weighted probabilistic forecast
 
     Args:
-        horizon: Number of days ahead to forecast (e.g. 3 → D+1, D+2, D+3).
-        reference_date: Anchor date for analog matching (YYYY-MM-DD).
+        horizon: Number of days ahead to forecast (e.g. 4 → D+1 … D+4).
+        reference_date: Anchor date for the base feature row (YYYY-MM-DD).
                         Defaults to today.
-        n_analogs: Number of analog days to find.
+        n_analogs: Number of analog days to find per target day.
         weight_method: Weighting method for analogs.
         config: Optional ScenarioConfig (overrides n_analogs / weight_method).
 
     Returns:
-        Dict with strip_table, quantiles_table, analogs, per_day results.
+        Dict with strip_table, quantiles_table, per-day analogs and results.
     """
     if config is None:
         config = configs.ScenarioConfig(
@@ -70,15 +80,29 @@ def run_strip(
     forecast_dates = [ref_date + timedelta(days=d) for d in range(1, horizon + 1)]
 
     logger.info("=" * 70)
-    logger.info(f"Strip Forecast: {len(forecast_dates)} days — {config.hub}")
-    logger.info(f"Reference: {ref_date} ({DAY_ABBR[ref_date.weekday()]})")
+    logger.info(f"Strip Forecast (rolling-reference): {len(forecast_dates)} days — {config.hub}")
+    logger.info(f"Base reference: {ref_date} ({DAY_ABBR[ref_date.weekday()]})")
     for fd in forecast_dates:
         logger.info(f"  D+{(fd - ref_date).days}: {fd} ({DAY_ABBR[fd.weekday()]})")
     logger.info("=" * 70)
 
-    # 1. Build daily feature matrix (once)
+    cache_kwargs = dict(
+        cache_dir=cache_dir,
+        cache_enabled=cache_enabled,
+        ttl_hours=cache_ttl_hours,
+        force_refresh=force_refresh,
+    )
+
+    # ── 1. Build daily feature matrix (once) ────────────────────────
     logger.info("Building daily feature matrix...")
-    df_features = build_daily_features(schema=config.schema, hub=config.hub)
+    df_features = build_daily_features(
+        schema=config.schema,
+        hub=config.hub,
+        cache_dir=cache_dir,
+        cache_enabled=cache_enabled,
+        cache_ttl_hours=cache_ttl_hours,
+        force_refresh=force_refresh,
+    )
 
     available_dates = sorted(df_features["date"].unique())
     logger.info(f"Feature matrix: {len(available_dates):,} days "
@@ -89,11 +113,65 @@ def run_strip(
                      f"Latest available: {available_dates[-1]}")
         return {"error": f"Reference date {ref_date} not available"}
 
-    # 2. Find analogs (once, against the reference date)
-    logger.info(f"Finding {config.n_analogs} analogs for {ref_date}...")
-    analogs_df = find_analogs(
-        target_date=ref_date,
-        df_features=df_features,
+    # ── 2. Pull ALL hourly DA LMP data (once) ───────────────────────
+    logger.info("Pulling hourly DA LMP data...")
+    df_lmp_all = pull_with_cache(
+        source_name="lmps_hourly_da",
+        pull_fn=lmps_hourly.pull,
+        pull_kwargs={"schema": config.schema, "hub": config.hub, "market": "da"},
+        **cache_kwargs,
+    )
+    df_lmp_all["date"] = pd.to_datetime(df_lmp_all["date"]).dt.date
+
+    # ── 3. Pull multi-day forecast data for synthetic rows ──────────
+    logger.info("Pulling multi-day forecast data for synthetic references...")
+
+    df_weather_all = None
+    try:
+        df_weather_all = pull_with_cache(
+            source_name="weather_hourly",
+            pull_fn=weather_hourly.pull,
+            pull_kwargs={},
+            **cache_kwargs,
+        )
+    except Exception as e:
+        logger.warning(f"Weather forecast pull failed: {e}")
+
+    df_solar_multi = None
+    try:
+        df_solar_multi = pull_with_cache(
+            source_name="pjm_solar_forecast_rto",
+            pull_fn=pjm_solar_forecast_hourly.pull,
+            pull_kwargs={"timezone": "America/New_York"},
+            **cache_kwargs,
+        )
+    except Exception as e:
+        logger.warning(f"PJM solar multi-day forecast pull failed: {e}")
+
+    df_wind_multi = None
+    try:
+        df_wind_multi = pull_with_cache(
+            source_name="pjm_wind_forecast_rto",
+            pull_fn=pjm_wind_forecast_hourly.pull,
+            pull_kwargs={"timezone": "America/New_York"},
+            **cache_kwargs,
+        )
+    except Exception as e:
+        logger.warning(f"PJM wind multi-day forecast pull failed: {e}")
+
+    df_outage_multi = None
+    try:
+        df_outage_multi = pull_with_cache(
+            source_name="outages_forecast_daily",
+            pull_fn=outages_forecast_daily.pull,
+            pull_kwargs={"schema": config.schema},
+            **cache_kwargs,
+        )
+    except Exception as e:
+        logger.warning(f"Outage forecast pull failed: {e}")
+
+    # ── 4. Per-day analog selection + forecast ──────────────────────
+    analog_kwargs = dict(
         n_analogs=config.n_analogs,
         feature_weights=config.resolved_weights(),
         apply_calendar_filter=config.apply_calendar_filter,
@@ -112,40 +190,78 @@ def run_strip(
         adaptive_softmax_temperature=config.adaptive_softmax_temperature,
     )
 
-    # 3. Pull ALL hourly DA LMP data once
-    logger.info("Pulling hourly DA LMP data...")
-    df_lmp_all = lmps_hourly.pull(schema=config.schema, hub=config.hub, market="da")
-
-    # 4. Build forecast for each horizon day
     strip_rows = []
     all_quantile_rows = []
     per_day = {}
+    per_day_analogs: dict[str, pd.DataFrame] = {}
 
     for offset, target_date in enumerate(forecast_dates, start=1):
-        logger.info(f"--- D+{offset}: {target_date} ({DAY_ABBR[target_date.weekday()]}) ---")
+        synthetic_ref_date = target_date - timedelta(days=1)
+        logger.info(f"--- D+{offset}: {target_date} ({DAY_ABBR[target_date.weekday()]}) "
+                     f"| ref={synthetic_ref_date} ---")
 
-        # For each analog, get the day+offset LMP profile
-        analog_offset_dates = [d + timedelta(days=offset) for d in analogs_df["date"]]
-        df_offset_lmps = df_lmp_all[df_lmp_all["date"].isin(analog_offset_dates)].copy()
+        # ── Find analogs for this day ───────────────────────────────
+        if synthetic_ref_date == ref_date:
+            # D+1: today's row already exists — use standard find_analogs
+            analogs_df = find_analogs(
+                target_date=ref_date,
+                df_features=df_features,
+                **analog_kwargs,
+            )
+        else:
+            # D+2+: build synthetic row, inject, find analogs
+            synthetic_row = build_synthetic_reference_row(
+                df_features=df_features,
+                today=ref_date,
+                target_date=target_date,
+                df_weather=df_weather_all,
+                df_solar_forecast=df_solar_multi,
+                df_wind_forecast=df_wind_multi,
+                df_outage_forecast=df_outage_multi,
+            )
 
-        # Map back to analog date for weight lookup
-        df_offset_lmps["analog_date"] = df_offset_lmps["date"] - timedelta(days=offset)
-        df_offset_lmps = df_offset_lmps.merge(
+            # Remove today (ref_date) and any pre-existing row at synthetic_ref_date.
+            # Today must be excluded because the synthetic row clones today's
+            # reference features — without this, today would match against
+            # itself on all high-weight groups and dominate the analog list.
+            df_augmented = df_features[
+                ~df_features["date"].isin([ref_date, synthetic_ref_date])
+            ].copy()
+            df_augmented = pd.concat(
+                [df_augmented, synthetic_row.to_frame().T],
+                ignore_index=True,
+            )
+
+            analogs_df = find_analogs(
+                target_date=synthetic_ref_date,
+                df_features=df_augmented,
+                **analog_kwargs,
+            )
+
+        per_day_analogs[str(target_date)] = analogs_df
+
+        # ── Collect analog D+1 LMP profiles (always offset=1) ──────
+        analog_next_dates = [d + timedelta(days=1) for d in analogs_df["date"]]
+        df_next_lmps = df_lmp_all[df_lmp_all["date"].isin(analog_next_dates)].copy()
+
+        # Map next-day back to analog date for weight lookup
+        df_next_lmps["analog_date"] = df_next_lmps["date"] - timedelta(days=1)
+        df_next_lmps = df_next_lmps.merge(
             analogs_df[["date", "weight", "rank", "distance"]],
             left_on="analog_date", right_on="date", suffixes=("", "_analog"),
         )
 
-        n_with_data = df_offset_lmps["analog_date"].nunique()
-        logger.info(f"  {n_with_data}/{len(analogs_df)} analogs have day+{offset} LMP data")
+        n_with_data = df_next_lmps["analog_date"].nunique()
+        logger.info(f"  {n_with_data}/{len(analogs_df)} analogs have D+1 LMP data")
 
         if n_with_data == 0:
-            logger.warning(f"  No day+{offset} LMP data — skipping {target_date}")
+            logger.warning(f"  No D+1 LMP data — skipping {target_date}")
             continue
 
-        # Build probabilistic forecast for this day
+        # ── Build probabilistic forecast ────────────────────────────
         forecast_rows = []
         for h in configs.HOURS:
-            hour_data = df_offset_lmps[df_offset_lmps["hour_ending"] == h]
+            hour_data = df_next_lmps[df_next_lmps["hour_ending"] == h]
             if len(hour_data) == 0:
                 continue
 
@@ -206,22 +322,28 @@ def run_strip(
             "has_actuals": has_actuals,
             "n_analogs_used": n_with_data,
             "offset": offset,
+            "analogs": analogs_df,
         }
 
-    # 5. Assemble output tables
+    # ── 5. Assemble output tables ───────────────────────────────────
     cols = ["Date", "Type"] + [f"HE{h}" for h in range(1, 25)] + ["OnPeak", "OffPeak", "Flat"]
     strip_table = pd.DataFrame(strip_rows, columns=cols)
     quantiles_table = pd.DataFrame(all_quantile_rows, columns=cols)
 
-    # 6. Print results
-    _print_strip_analogs(analogs_df, ref_date, forecast_dates, config.hub)
+    # ── 6. Print results ────────────────────────────────────────────
+    _print_strip_analogs(per_day_analogs, ref_date, forecast_dates, config.hub)
     _print_strip_table(strip_table, config.hub)
     _print_strip_quantiles(quantiles_table)
+
+    # Use D+1 analogs as top-level default for backward compatibility
+    first_day_key = str(forecast_dates[0]) if forecast_dates else None
+    top_level_analogs = per_day_analogs.get(first_day_key, pd.DataFrame())
 
     return {
         "strip_table": strip_table,
         "quantiles_table": quantiles_table,
-        "analogs": analogs_df,
+        "analogs": top_level_analogs,
+        "per_day_analogs": per_day_analogs,
         "reference_date": str(ref_date),
         "forecast_dates": [str(d) for d in forecast_dates],
         "per_day": per_day,
@@ -232,38 +354,49 @@ def run_strip(
 
 
 def _print_strip_analogs(
-    analogs_df: pd.DataFrame,
+    per_day_analogs: dict[str, pd.DataFrame],
     ref_date: date,
     forecast_dates: list[date],
     hub: str,
 ) -> None:
-    """Print analog days used for the strip."""
+    """Print analog days used for each strip day."""
     dates_str = ", ".join(
         f"{d} ({DAY_ABBR[d.weekday()]})" for d in forecast_dates
     )
     print("\n" + "=" * 100)
-    print("  LIKE-DAY STRIP FORECAST — ANALOG DAYS")
-    print(f"  Reference: {ref_date} ({DAY_ABBR[ref_date.weekday()]})  |  Hub: {hub}")
+    print("  LIKE-DAY STRIP FORECAST — ROLLING-REFERENCE ANALOGS")
+    print(f"  Base reference: {ref_date} ({DAY_ABBR[ref_date.weekday()]})  |  Hub: {hub}")
     print(f"  Forecast dates: {dates_str}")
     print("=" * 100)
 
-    display = analogs_df.head(configs.DEFAULT_N_DISPLAY).copy()
-    display["date"] = display["date"].astype(str)
-    display["distance"] = display["distance"].map("{:.4f}".format)
-    display["similarity"] = display["similarity"].map("{:.2%}".format)
-    display["weight"] = display["weight"].map("{:.4f}".format)
+    for fd in forecast_dates:
+        key = str(fd)
+        analogs_df = per_day_analogs.get(key)
+        if analogs_df is None or analogs_df.empty:
+            continue
 
-    print(tabulate(display, headers="keys", tablefmt="simple", showindex=False))
-    print(f"\n  Total analogs: {len(analogs_df)} | "
-          f"Top-5 weight sum: {analogs_df.head(5)['weight'].sum():.2%} | "
-          f"Distance range: {analogs_df['distance'].min():.4f} — "
-          f"{analogs_df['distance'].max():.4f}")
+        offset = (fd - ref_date).days
+        ref_day = fd - timedelta(days=1)
+        print(f"\n  D+{offset}: {fd} ({DAY_ABBR[fd.weekday()]})  "
+              f"| ref={ref_day} ({DAY_ABBR[ref_day.weekday()]})")
+        print("-" * 90)
+
+        display = analogs_df.head(configs.DEFAULT_N_DISPLAY).copy()
+        display["date"] = display["date"].astype(str)
+        display["distance"] = display["distance"].map("{:.4f}".format)
+        display["similarity"] = display["similarity"].map("{:.2%}".format)
+        display["weight"] = display["weight"].map("{:.4f}".format)
+        print(tabulate(display, headers="keys", tablefmt="simple", showindex=False))
+
+        print(f"  Total: {len(analogs_df)} | "
+              f"Top-5 wt: {analogs_df.head(5)['weight'].sum():.2%} | "
+              f"Dist: {analogs_df['distance'].min():.4f}–{analogs_df['distance'].max():.4f}")
 
 
 def _print_strip_table(table: pd.DataFrame, hub: str) -> None:
     """Print the combined strip forecast table."""
     print("\n" + "=" * 130)
-    print(f"  DA LMP LIKE-DAY STRIP FORECAST — {hub} ($/MWh)")
+    print(f"  DA LMP LIKE-DAY STRIP FORECAST (ROLLING-REF) — {hub} ($/MWh)")
     print("=" * 130)
 
     header = f"{'Date':<12} {'Type':<10}"
@@ -275,7 +408,6 @@ def _print_strip_table(table: pd.DataFrame, hub: str) -> None:
 
     prev_date = None
     for _, row in table.iterrows():
-        # Separator between dates
         if prev_date is not None and row["Date"] != prev_date:
             print("-" * len(header))
         prev_date = row["Date"]
@@ -326,9 +458,19 @@ def _print_strip_quantiles(table: pd.DataFrame) -> None:
 
 
 def main():
-    """Entry point — initialize settings and run 3-day strip forecast."""
+    """Entry point — initialize settings and run strip forecast through Friday."""
     import src.like_day_forecast.settings
-    run_strip(horizon=3)
+
+    today = date.today()
+    wd = today.weekday()
+    if wd <= 3:
+        horizon = 4 - wd
+    elif wd == 4:
+        horizon = 5
+    else:
+        horizon = 5
+
+    run_strip(horizon=horizon)
 
 
 if __name__ == "__main__":

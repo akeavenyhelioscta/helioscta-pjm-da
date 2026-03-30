@@ -61,9 +61,10 @@ def build_fragments(
     df_lmp_rt = pull_with_cache(
         source_name="lmps_hourly_rt",
         pull_fn=lmps_hourly.pull,
-        pull_kwargs={"schema": schema, "hub": configs.HUB, "market": "rt"},
+        pull_kwargs={"schema": schema, "market": "rt"},
         **cache_kwargs,
     )
+    df_lmp_rt = df_lmp_rt[df_lmp_rt["hub"] == configs.HUB]
 
     return [
         ("Hourly Generation Profiles", _profiles_fig(df), None),

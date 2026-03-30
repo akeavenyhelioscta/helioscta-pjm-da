@@ -1,6 +1,6 @@
 with params as (
     select
-        nullif(regexp_replace('{start_date}', '[^0-9-]', '', 'g'), '')::date as start_date,
+        coalesce(nullif(regexp_replace('{start_date}', '[^0-9-]', '', 'g'), '')::date, '2022-01-01'::date) as start_date,
         nullif(regexp_replace('{end_date}', '[^0-9-]', '', 'g'), '')::date as end_date
 )
 select

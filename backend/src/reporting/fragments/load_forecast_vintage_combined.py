@@ -1,17 +1,20 @@
 """Combined load forecast vintage dashboard — RTO + WEST + MIDATL + SOUTH.
 
-For each region and source (PJM, Meteologica), shows 5 forecast vintages:
-Latest, DA Cutoff, DA -12h, DA -24h, DA -48h.
+For each region shows three charts:
+  1. PJM vintage overlay (5 vintages)
+  2. Meteologica vintage overlay (5 vintages + Euro ensemble band)
+  3. PJM vs Meteologica diff per vintage (PJM − Meteo MW)
+
+Vintages: Latest, DA Cutoff, DA -12h, DA -24h, DA -48h.
 
 Global controls at the top:
   1. Date pills — filter x-axis across all charts
   2. Vintage pills — show/hide vintage traces across all charts
 
-Each chart has an independent RAMP toggle showing hour-over-hour MW change
-for all vintages on a secondary y-axis.
+PJM and Meteologica charts have an independent RAMP toggle showing
+hour-over-hour MW change for all vintages on a secondary y-axis.
 
 Regions: RTO, WEST, MIDATL, SOUTH
-Sources: PJM (load lines), Meteologica (load lines + Euro ensemble band)
 """
 import logging
 from pathlib import Path
@@ -23,11 +26,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 
 from src.like_day_forecast import configs
-from src.data import (
-    pjm_load_forecast_hourly,
-    meteologica_load_forecast_hourly,
-    meteologica_euro_ens_forecast,
-)
+from src.data import meteologica_euro_ens_forecast, load_forecast_vintages
 from src.utils.cache_utils import pull_with_cache
 
 logger = logging.getLogger(__name__)
@@ -43,7 +42,7 @@ _REGION_LABELS = {
 }
 _PREFIX = "vintComb"
 
-# ── Vintage styling (matches load_forecast_changes_rto) ─────────────
+# ── Vintage styling ─────────────────────────────────────────────────
 
 VINTAGE_COLORS: dict[str, str] = {
     "Latest": "#60a5fa",
@@ -68,11 +67,6 @@ VINTAGE_WIDTH: dict[str, float] = {
 }
 _VINTAGE_ORDER = ["Latest", "DA Cutoff", "DA -12h", "DA -24h", "DA -48h"]
 
-_SOURCE_MODULES = {
-    "pjm": pjm_load_forecast_hourly,
-    "meteologica": meteologica_load_forecast_hourly,
-}
-
 Section = tuple[str, Any, str | None]
 
 
@@ -96,26 +90,42 @@ def build_fragments(
         force_refresh=force_refresh,
     )
 
-    # ── Pull data ────────────────────────────────────────────────
-    # vintage_data[region][source_key] = DataFrame | None
+    # ── Pull data (one cache file per source, all regions) ──────
+    pjm_all = _safe_pull(
+        "forecast_vintage_pjm",
+        load_forecast_vintages.pull_combined_vintages,
+        {"source": "pjm"},
+        **cache_kwargs,
+    )
+    meteo_all = _safe_pull(
+        "forecast_vintage_meteologica",
+        load_forecast_vintages.pull_combined_vintages,
+        {"source": "meteologica"},
+        **cache_kwargs,
+    )
+    euro_all = _safe_pull(
+        "meteologica_euro_ens",
+        meteologica_euro_ens_forecast.pull_strip_all_regions,
+        {},
+        **cache_kwargs,
+    )
+
+    # Split into per-region dicts for chart building
     vintage_data: dict[str, dict[str, pd.DataFrame | None]] = {}
     euro_data: dict[str, pd.DataFrame | None] = {}
-
     for region in REGIONS:
         vintage_data[region] = {}
-        for source_key in ("pjm", "meteologica"):
-            vintage_data[region][source_key] = _safe_pull(
-                f"forecast_vintage_{source_key}_{region.lower()}",
-                _pull_source_vintages,
-                {"source": source_key, "region": region},
-                **cache_kwargs,
-            )
-        euro_data[region] = _safe_pull(
-            f"meteologica_euro_ens_vintage_{region.lower()}",
-            meteologica_euro_ens_forecast.pull_strip,
-            {"region": region},
-            **cache_kwargs,
-        )
+        for source_key, df_all in [("pjm", pjm_all), ("meteologica", meteo_all)]:
+            if df_all is not None and len(df_all) > 0 and "region" in df_all.columns:
+                sub = df_all[df_all["region"] == region]
+                vintage_data[region][source_key] = sub if len(sub) > 0 else None
+            else:
+                vintage_data[region][source_key] = None
+        if euro_all is not None and len(euro_all) > 0 and "region" in euro_all.columns:
+            sub = euro_all[euro_all["region"] == region]
+            euro_data[region] = sub if len(sub) > 0 else None
+        else:
+            euro_data[region] = None
 
     # ── Collect all dates for the global filter ──────────────────
     all_dates: set = set()
@@ -130,6 +140,7 @@ def build_fragments(
     for region in REGIONS:
         chart_ids.append(f"{_PREFIX}Pjm{region}")
         chart_ids.append(f"{_PREFIX}Meteo{region}")
+        chart_ids.append(f"{_PREFIX}Diff{region}")
 
     fragments: list = []
 
@@ -192,6 +203,28 @@ def build_fragments(
             fragments.append((f"Meteologica {label} Vintage Overlay",
                               _empty(f"No Meteologica vintage data for {label}."), None))
 
+        # PJM vs Meteologica diff chart
+        diff_chart_id = f"{_PREFIX}Diff{region}"
+        df_pjm_raw = vintage_data[region]["pjm"]
+        df_meteo_raw = vintage_data[region]["meteologica"]
+        has_both = (
+            df_pjm_raw is not None and len(df_pjm_raw) > 0
+            and df_meteo_raw is not None and len(df_meteo_raw) > 0
+        )
+        if has_both:
+            chart = _build_diff_chart(
+                diff_chart_id, df_pjm_raw, df_meteo_raw,
+                f"PJM vs Meteologica {label} — Diff by Vintage",
+            )
+            if chart is not None:
+                fragments.append((f"PJM vs Meteologica {label} Diff", chart, None))
+            else:
+                fragments.append((f"PJM vs Meteologica {label} Diff",
+                                  _empty(f"No common intervals for diff in {label}."), None))
+        else:
+            fragments.append((f"PJM vs Meteologica {label} Diff",
+                              _empty(f"Need both PJM and Meteologica data for {label} diff."), None))
+
     return fragments
 
 
@@ -209,51 +242,6 @@ def _safe_pull(source_name, pull_fn, pull_kwargs, **cache_kwargs):
     except Exception as e:
         logger.warning(f"{source_name} pull failed: {e}")
         return None
-
-
-def _pull_source_vintages(source: str, region: str = "RTO") -> pd.DataFrame:
-    """Pull Latest + 4 DA cutoff vintages for one source and region."""
-    if source not in _SOURCE_MODULES:
-        raise ValueError(f"Unknown source: {source!r}")
-
-    mod = _SOURCE_MODULES[source]
-    _cols = ["forecast_date", "hour_ending", "forecast_load_mw",
-             "forecast_execution_datetime", "vintage_label",
-             "vintage_anchor_execution_datetime"]
-
-    # 1. Latest vintage
-    df_latest = mod.pull(region=region)
-    if df_latest is not None and len(df_latest) > 0:
-        df_latest["forecast_date"] = pd.to_datetime(df_latest["forecast_date"])
-        df_latest["vintage_label"] = "Latest"
-        df_latest["vintage_anchor_execution_datetime"] = pd.to_datetime(
-            df_latest["forecast_execution_datetime"]
-        ).max()
-        df_latest = df_latest[_cols]
-    else:
-        df_latest = pd.DataFrame(columns=_cols)
-
-    # 2. DA cutoff vintages
-    df_da = mod.pull_da_cutoff_vintages(region=region)
-    if df_da is not None and len(df_da) > 0:
-        df_da["forecast_date"] = pd.to_datetime(df_da["forecast_date"])
-        df_da = df_da[_cols]
-    else:
-        df_da = pd.DataFrame(columns=_cols)
-
-    df = pd.concat([df_latest, df_da], ignore_index=True)
-    if len(df) == 0:
-        logger.warning(f"No vintage rows for source={source}, region={region}")
-        return pd.DataFrame()
-
-    df["hour_ending"] = pd.to_numeric(df["hour_ending"], errors="coerce").astype("Int64")
-    df["forecast_load_mw"] = pd.to_numeric(df["forecast_load_mw"], errors="coerce")
-    df["forecast_execution_datetime"] = pd.to_datetime(df["forecast_execution_datetime"])
-    df["vintage_anchor_execution_datetime"] = pd.to_datetime(df["vintage_anchor_execution_datetime"])
-
-    df = df.dropna(subset=["forecast_date", "hour_ending", "forecast_load_mw", "vintage_label"]).copy()
-    df["hour_ending"] = df["hour_ending"].astype(int)
-    return df
 
 
 def _filter_common_intervals(df: pd.DataFrame) -> pd.DataFrame:
@@ -473,6 +461,112 @@ def _build_vintage_chart(
     trace_map_json = {v: vintage_trace_map[v] for v in order if vintage_trace_map[v]}
 
     return _assemble_chart(chart_id, fig, trace_map_json, ramp_start_idx, ramp_end_idx)
+
+
+# ── Diff chart builder ─────────────────────────────────────────────
+
+
+def _build_diff_chart(
+    chart_id: str,
+    df_pjm: pd.DataFrame,
+    df_meteo: pd.DataFrame,
+    title: str,
+) -> str | None:
+    """Build a PJM - Meteologica diff chart per vintage.
+
+    For each vintage present in both sources, merges on (forecast_date,
+    hour_ending) and plots the MW difference as a line.  A zero reference
+    line is drawn for context.  Returns None if no common data exists.
+    """
+    _join_cols = ["vintage_label", "forecast_date", "hour_ending"]
+
+    pjm = df_pjm[["vintage_label", "forecast_date", "hour_ending", "forecast_load_mw"]].copy()
+    meteo = df_meteo[["vintage_label", "forecast_date", "hour_ending", "forecast_load_mw"]].copy()
+
+    pjm["forecast_date"] = pd.to_datetime(pjm["forecast_date"])
+    meteo["forecast_date"] = pd.to_datetime(meteo["forecast_date"])
+
+    merged = pjm.merge(meteo, on=_join_cols, suffixes=("_pjm", "_meteo"), how="inner")
+    if len(merged) == 0:
+        return None
+
+    merged["diff_mw"] = merged["forecast_load_mw_pjm"] - merged["forecast_load_mw_meteo"]
+
+    order = [v for v in _VINTAGE_ORDER if v in merged["vintage_label"].unique()]
+    if not order:
+        return None
+
+    fig = go.Figure()
+    vintage_trace_map: dict[str, list[int]] = {v: [] for v in _VINTAGE_ORDER}
+
+    # Zero reference line
+    merged_prepped = _prep_diff(merged)
+    fig.add_trace(go.Scatter(
+        x=[merged_prepped["datetime"].min(), merged_prepped["datetime"].max()],
+        y=[0, 0],
+        mode="lines",
+        line=dict(color="#4a5568", width=1, dash="dash"),
+        showlegend=False,
+        hoverinfo="skip",
+    ))
+
+    # Diff lines per vintage
+    for label in order:
+        sub = _prep_diff(merged[merged["vintage_label"] == label].copy())
+        if len(sub) == 0:
+            continue
+        idx = len(fig.data)
+        vintage_trace_map[label].append(idx)
+        fig.add_trace(go.Scatter(
+            x=sub["datetime"],
+            y=sub["diff_mw"],
+            mode="lines",
+            name=label,
+            line=dict(
+                color=VINTAGE_COLORS.get(label, "#94a3b8"),
+                width=VINTAGE_WIDTH.get(label, 1.5),
+                dash=VINTAGE_DASH.get(label, "solid"),
+            ),
+            customdata=np.column_stack([
+                sub["_date_label"], sub["_he"],
+                sub["forecast_load_mw_pjm"].map("{:,.0f}".format),
+                sub["forecast_load_mw_meteo"].map("{:,.0f}".format),
+            ]),
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                "HE %{customdata[1]}<br>"
+                f"{label} Diff: %{{y:+,.0f}} MW<br>"
+                "PJM: %{customdata[2]} MW | Meteo: %{customdata[3]} MW"
+                "<extra></extra>"
+            ),
+        ))
+
+    # Layout
+    fig.update_layout(
+        title=title,
+        xaxis=dict(tickformat="%a %b-%d %I %p",
+                    gridcolor="rgba(99,110,250,0.08)"),
+        yaxis=dict(title="PJM − Meteologica (MW)", tickformat=",.0f",
+                    gridcolor="rgba(99,110,250,0.1)",
+                    zeroline=True, zerolinecolor="#4a5568", zerolinewidth=1),
+        height=400, template=PLOTLY_TEMPLATE,
+        legend=dict(orientation="h", yanchor="top", y=-0.08, xanchor="left", x=0),
+        margin=dict(l=60, r=60, t=40, b=60),
+        hovermode="x unified",
+    )
+
+    trace_map_json = {v: vintage_trace_map[v] for v in order if vintage_trace_map[v]}
+    # No ramp traces on diff chart
+    return _assemble_chart(chart_id, fig, trace_map_json, len(fig.data), len(fig.data) - 1)
+
+
+def _prep_diff(df: pd.DataFrame) -> pd.DataFrame:
+    """Sort and add datetime + customdata columns for diff data."""
+    df = df.sort_values(["forecast_date", "hour_ending"]).copy()
+    df["datetime"] = pd.to_datetime(df["forecast_date"]) + pd.to_timedelta(df["hour_ending"], unit="h")
+    df["_date_label"] = pd.to_datetime(df["forecast_date"]).dt.strftime("%a %b-%d")
+    df["_he"] = df["hour_ending"].astype(int)
+    return df
 
 
 # ── Chart assembly ─────────────────────────────────────────────────

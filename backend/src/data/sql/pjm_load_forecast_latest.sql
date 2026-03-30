@@ -1,4 +1,5 @@
--- PJM official load forecast (RTO), latest execution per target date.
+-- PJM official load forecast, latest execution per target date.
+-- Parameterized by {region} (default RTO).
 -- Returns the most recent forecast vintage for each (date, hour_ending)
 -- from today onward (forward-looking only).
 with params as (

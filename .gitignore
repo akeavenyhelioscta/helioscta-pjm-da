@@ -9,10 +9,12 @@ __pycache__/
 
 # Jupyter notebooks checkpoints
 .ipynb_checkpoints/
+backend/notebooks/
 
 # Logs
 **/logs/*
 *.log
+*.pid
 
 # claude
 .claude/*
@@ -61,3 +63,6 @@ TODO/
 
 # MLflow
 *.db
+
+# frontend
+frontend/*

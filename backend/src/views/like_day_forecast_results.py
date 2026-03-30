@@ -50,6 +50,7 @@ def build_view_model(pipeline_result: dict) -> dict:
     reference_date: str = pipeline_result["reference_date"]
     n_analogs_used: int = pipeline_result["n_analogs_used"]
     metrics: dict | None = pipeline_result.get("metrics")
+    analogs_df: pd.DataFrame | None = pipeline_result.get("analogs")
 
     # ── Extract source rows ─────────────────────────────────────────
     forecast_row = output_table[output_table["Type"] == "Forecast"].iloc[0]
@@ -147,11 +148,25 @@ def build_view_model(pipeline_result: dict) -> dict:
         "sharpness_90": _safe_round(metrics.get("sharpness_90pct")) if metrics else None,
     }
 
+    # ── Analog days ──────────────────────────────────────────────────
+    analogs: list[dict] | None = None
+    if analogs_df is not None and len(analogs_df) > 0:
+        analogs = []
+        for _, arow in analogs_df.iterrows():
+            analogs.append({
+                "date": str(arow["date"]),
+                "rank": int(arow["rank"]) if "rank" in arow else None,
+                "distance": _safe_round(arow.get("distance"), 4),
+                "similarity": _safe_round(arow.get("similarity"), 4),
+                "weight": _safe_round(arow.get("weight"), 4),
+            })
+
     return {
         "forecast_date": forecast_date,
         "reference_date": reference_date,
         "has_actuals": has_actuals,
         "n_analogs_used": n_analogs_used,
+        "analogs": analogs,
         "hourly": hourly,
         "summary": summary,
         "bands": bands,

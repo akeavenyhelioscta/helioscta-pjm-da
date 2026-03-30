@@ -18,7 +18,6 @@ from src.utils.cache_utils import pull_with_cache
 logger = logging.getLogger(__name__)
 
 PLOTLY_TEMPLATE = "plotly_dark"
-HISTORY_START = "2023-01-01"
 
 Section = tuple[str, Any, str | None]
 
@@ -71,9 +70,9 @@ def build_fragments(
     )
 
     df = _safe_pull(
-        "outages_actual_daily_history",
+        "outages_actual_daily",
         outages_actual_daily.pull,
-        {"sql_overrides": {"start_date": HISTORY_START}},
+        {"schema": configs.SCHEMA},
         **cache_kwargs,
     )
 

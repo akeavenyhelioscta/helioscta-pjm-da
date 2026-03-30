@@ -58,6 +58,9 @@ def build_fragments(
     if df is None or len(df) == 0:
         return [("Forecast Outages RTO", _empty("No outage forecast data available."), None)]
 
+    # Filter to RTO region
+    df = df[df["region"] == configs.LOAD_REGION].copy()
+
     # Keep only the highest-rank (most recent) forecast per execution_date × forecast_date
     df = df.sort_values("forecast_rank", ascending=False)
     df = df.drop_duplicates(subset=["forecast_execution_date", "forecast_date"], keep="first")

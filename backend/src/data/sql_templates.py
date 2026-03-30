@@ -5,6 +5,7 @@ SQL files can define defaults via `COALESCE(NULLIF('{key}', ''), <default>)`.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,12 @@ class _BlankDefaultDict(dict):
         return ""
 
 
+IDENTIFIER_KEYS = {
+    "schema",
+}
+IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
 def render_sql_template(sql_file: Path, overrides: dict[str, Any] | None = None) -> str:
     """Load and render a SQL template file using optional override values."""
     query = sql_file.read_text(encoding="utf-8")
@@ -23,6 +30,12 @@ def render_sql_template(sql_file: Path, overrides: dict[str, Any] | None = None)
 
     if overrides:
         for key, value in overrides.items():
-            rendered[key] = "" if value is None else str(value)
+            rendered_value = "" if value is None else str(value)
+            if key in IDENTIFIER_KEYS and rendered_value:
+                if not IDENTIFIER_RE.match(rendered_value):
+                    raise ValueError(
+                        f"Invalid SQL identifier override for '{key}': {rendered_value!r}"
+                    )
+            rendered[key] = rendered_value
 
     return query.format_map(rendered)

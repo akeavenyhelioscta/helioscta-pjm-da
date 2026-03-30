@@ -4,6 +4,7 @@ import logging
 
 from src.utils.azure_postgresql import pull_from_db
 from src.data.sql_templates import render_sql_template
+from src.data.frame_validation import validate_source_frame
 from src.like_day_forecast import configs
 
 logger = logging.getLogger(__name__)
@@ -24,5 +25,18 @@ def pull_daily(
 
     df = pull_from_db(query=query)
     df["date"] = pd.to_datetime(df["date"]).dt.date
+    df = validate_source_frame(
+        df=df,
+        source_name="dates_daily",
+        required_columns=[
+            "date",
+            "day_of_week_number",
+            "is_weekend",
+            "is_nerc_holiday",
+            "summer_winter",
+        ],
+        unique_key_columns=["date"],
+        drop_duplicate_keys=True,
+    )
     logger.info(f"Pulled {len(df):,} rows")
     return df

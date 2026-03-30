@@ -14,12 +14,15 @@ from zoneinfo import ZoneInfo
 
 REPORT_GROUPS: dict[str, tuple[str, str]] = {
     "forecast_results": ("DA Model", "Like Day Model"),
+    "meteologica_da_price_forecast": ("DA Model", "Meteologica DA Price"),
+    "strip_forecast": ("DA Model", "Strip Forecast"),
     "rt_load_metered_rto": ("Input Validation", "RT Load Metered RTO"),
-    "load_forecast_rto": ("Load Forecasts", "Load Forecasts RTO"),
-    "forecast_evolution": ("Load Forecasts", "Load Forecast Changes RTO"),
+    "load_forecast_vintage_combined": ("Load Forecasts", "Load Forecast Vintages"),
+    "net_load_forecast_vintage_combined": ("Load Forecasts", "Net Load Forecast Vintages"),
+    "solar_forecast_vintage_combined": ("Renewable Forecasts", "Solar Forecast Vintages"),
+    "wind_forecast_vintage_combined": ("Renewable Forecasts", "Wind Forecast Vintages"),
     "fuel_mix": ("Fuel Mix", "Fuel Mix"),
     "lmp_history": ("Input Validation", "LMP History"),
-    "meteo_vintage_table": ("Load Forecasts", "Meteologica Vintage Table"),
     "outages_forecast_rto": ("Outages", "Forecast Outages RTO"),
     "outages_term_bible": ("Outages", "Term Bible"),
     "outages_seasonal": ("Outages", "Seasonal Outages RTO"),

@@ -1,134 +1,134 @@
-"""Pull load forecast data for multiple vintage anchors (latest, -12h, -24h, -48h).
+"""Pull load forecast vintage data (Latest + DA cutoff vintages).
 
-Each vendor (PJM, Meteologica) is queried independently.  The module:
-  1. Finds distinct execution timestamps for the source.
-  2. Selects up to 4 anchors relative to the latest execution.
-  3. Pulls forecast data only for those execution timestamps.
-  4. Tags each row with its vintage label and offset.
+Provides two functions:
+  - ``pull_source_vintages(source, region)`` — single region
+  - ``pull_combined_vintages(source)`` — all regions in one DataFrame
 
-Returns a single DataFrame suitable for parquet caching.
+Both return a DataFrame with columns: region, forecast_date, hour_ending,
+forecast_load_mw, forecast_execution_datetime, vintage_label,
+vintage_anchor_execution_datetime.
+
+The combined variant is the preferred cache unit — one parquet per source
+holds every region, avoiding per-region cache file proliferation.
 """
 import logging
 
 import pandas as pd
 
-from src.utils.azure_postgresql import pull_from_db
+from src.data import pjm_load_forecast_hourly, meteologica_load_forecast_hourly
 
 logger = logging.getLogger(__name__)
 
-VINTAGE_OFFSETS: list[tuple[str, int]] = [
-    ("Latest", 0),
-    ("-12h", 12),
-    ("-24h", 24),
-    ("-48h", 48),
+REGIONS = ["RTO", "WEST", "MIDATL", "SOUTH"]
+
+_COLS = [
+    "region", "forecast_date", "hour_ending", "forecast_load_mw",
+    "forecast_execution_datetime", "vintage_label",
+    "vintage_anchor_execution_datetime",
 ]
 
-_SOURCE_CONFIG: dict[str, tuple[str, str]] = {
-    "pjm": ("pjm_cleaned", "pjm_load_forecast_hourly"),
-    "meteologica": ("meteologica_cleaned", "meteologica_pjm_demand_forecast_hourly"),
+_SOURCE_MODULES = {
+    "pjm": pjm_load_forecast_hourly,
+    "meteologica": meteologica_load_forecast_hourly,
 }
 
 
-def pull_all_vintages(source: str = "pjm", region: str = "RTO") -> pd.DataFrame:
-    """Pull load forecast data for up to 4 vintage anchors.
+def pull_source_vintages(source: str, region: str = "RTO") -> pd.DataFrame:
+    """Pull latest + DA cutoff vintages for one source and one region.
 
     Parameters
     ----------
     source : str
         ``"pjm"`` or ``"meteologica"``.
     region : str
-        PJM region code, default ``"RTO"``.
+        PJM region code (``"RTO"``, ``"WEST"``, ``"MIDATL"``, ``"SOUTH"``).
 
     Returns
     -------
     pd.DataFrame
-        Columns: ``date``, ``hour_ending``, ``forecast_load_mw``,
-        ``forecast_execution_datetime``, ``vintage_label``,
-        ``vintage_offset_hours``.  Empty DataFrame when no data is available.
+        Columns: region, forecast_date, hour_ending, forecast_load_mw,
+        forecast_execution_datetime, vintage_label,
+        vintage_anchor_execution_datetime.
     """
-    if source not in _SOURCE_CONFIG:
-        raise ValueError(f"Unknown source: {source!r}. Must be one of {list(_SOURCE_CONFIG)}")
+    if source not in _SOURCE_MODULES:
+        raise ValueError(
+            f"Unknown source: {source!r}. Must be one of {list(_SOURCE_MODULES)}"
+        )
 
-    schema, table = _SOURCE_CONFIG[source]
-    logger.info(f"Pulling {source} vintage data: {schema}.{table}, region={region}")
+    mod = _SOURCE_MODULES[source]
 
-    # ── 1. Distinct execution timestamps, newest first ────────────
-    exec_df = pull_from_db(
-        f"SELECT DISTINCT forecast_execution_datetime "
-        f"FROM {schema}.{table} "
-        f"WHERE region = '{region}' "
-        f"ORDER BY forecast_execution_datetime DESC "
-        f"LIMIT 200"
+    # 1. Latest vintage
+    df_latest = mod.pull(region=region)
+    if df_latest is not None and len(df_latest) > 0:
+        df_latest["forecast_date"] = pd.to_datetime(df_latest["forecast_date"])
+        df_latest["vintage_label"] = "Latest"
+        df_latest["vintage_anchor_execution_datetime"] = pd.to_datetime(
+            df_latest["forecast_execution_datetime"]
+        ).max()
+        df_latest["region"] = region
+        df_latest = df_latest[_COLS]
+    else:
+        df_latest = pd.DataFrame(columns=_COLS)
+
+    # 2. DA cutoff vintages
+    df_da = mod.pull_da_cutoff_vintages(region=region)
+    if df_da is not None and len(df_da) > 0:
+        df_da["forecast_date"] = pd.to_datetime(df_da["forecast_date"])
+        df_da["region"] = region
+        df_da = df_da[_COLS]
+    else:
+        df_da = pd.DataFrame(columns=_COLS)
+
+    df = pd.concat([df_latest, df_da], ignore_index=True)
+    if len(df) == 0:
+        logger.warning(f"No vintage rows for source={source}, region={region}")
+        return pd.DataFrame(columns=_COLS)
+
+    return _clean_dtypes(df)
+
+
+def pull_combined_vintages(source: str) -> pd.DataFrame:
+    """Pull latest + DA cutoff vintages for ALL regions.
+
+    One parquet cache file per source holds every region, so both the
+    view-model endpoint and the reporting fragment share the same cache.
+
+    Parameters
+    ----------
+    source : str
+        ``"pjm"`` or ``"meteologica"``.
+
+    Returns
+    -------
+    pd.DataFrame
+        Same columns as ``pull_source_vintages`` with rows for every region.
+    """
+    frames: list[pd.DataFrame] = []
+    for region in REGIONS:
+        df = pull_source_vintages(source, region)
+        if len(df) > 0:
+            frames.append(df)
+
+    if not frames:
+        return pd.DataFrame(columns=_COLS)
+
+    return pd.concat(frames, ignore_index=True)
+
+
+# ── Helpers ───────────────────────────────────────────────────────
+
+
+def _clean_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise dtypes after concat."""
+    df = df.copy()
+    df["hour_ending"] = pd.to_numeric(df["hour_ending"], errors="coerce").astype("Int64")
+    df["forecast_load_mw"] = pd.to_numeric(df["forecast_load_mw"], errors="coerce")
+    df["forecast_execution_datetime"] = pd.to_datetime(df["forecast_execution_datetime"])
+    df["vintage_anchor_execution_datetime"] = pd.to_datetime(
+        df["vintage_anchor_execution_datetime"],
     )
-
-    if exec_df is None or len(exec_df) == 0:
-        logger.warning(f"No execution timestamps found for {source}")
-        return pd.DataFrame()
-
-    # Parse timestamps for offset comparison; keep raw strings for SQL matching
-    exec_df["_ts"] = pd.to_datetime(exec_df["forecast_execution_datetime"])
-    exec_df = exec_df.sort_values("_ts", ascending=False).reset_index(drop=True)
-    latest_ts = exec_df["_ts"].iloc[0]
-
-    # ── 2. Find vintage anchors ───────────────────────────────────
-    anchors: list[dict] = []
-    for label, hours in VINTAGE_OFFSETS:
-        target = latest_ts - pd.Timedelta(hours=hours)
-        mask = exec_df["_ts"] <= target
-        if mask.any():
-            row = exec_df.loc[mask].iloc[0]
-            anchors.append({
-                "vintage_label": label,
-                "vintage_offset_hours": hours,
-                "raw_exec_ts": row["forecast_execution_datetime"],
-                "parsed_exec_ts": row["_ts"],
-            })
-            logger.info(
-                f"  {label}: target<={target}, matched={row['_ts']} "
-                f"(raw='{row['forecast_execution_datetime']}')"
-            )
-
-    if not anchors:
-        logger.warning(f"No vintage anchors resolved for {source}")
-        return pd.DataFrame()
-
-    # ── 3. Pull data for unique execution timestamps ──────────────
-    unique_raws = list({a["raw_exec_ts"] for a in anchors})
-    ts_sql = ", ".join(f"'{r}'" for r in unique_raws)
-
-    data_df = pull_from_db(
-        f"SELECT forecast_date AS date, hour_ending, forecast_load_mw, "
-        f"       forecast_execution_datetime "
-        f"FROM {schema}.{table} "
-        f"WHERE region = '{region}' "
-        f"  AND forecast_execution_datetime IN ({ts_sql}) "
-        f"ORDER BY forecast_execution_datetime, forecast_date, hour_ending"
-    )
-
-    if data_df is None or len(data_df) == 0:
-        logger.warning(f"No forecast data for {source} vintages")
-        return pd.DataFrame()
-
-    logger.info(f"Pulled {len(data_df):,} rows for {len(unique_raws)} unique execution timestamp(s)")
-
-    # ── 4. Tag rows with vintage labels via merge ─────────────────
-    anchor_df = pd.DataFrame([
-        {
-            "forecast_execution_datetime": a["raw_exec_ts"],
-            "vintage_label": a["vintage_label"],
-            "vintage_offset_hours": a["vintage_offset_hours"],
-        }
-        for a in anchors
-    ])
-
-    result = data_df.merge(anchor_df, on="forecast_execution_datetime", how="inner")
-    result["date"] = pd.to_datetime(result["date"])
-    result["forecast_execution_datetime"] = pd.to_datetime(result["forecast_execution_datetime"])
-
-    logger.info(
-        f"Result: {len(result):,} rows, "
-        f"vintages={result['vintage_label'].unique().tolist()}, "
-        f"dates={sorted(result['date'].dt.date.unique())}"
-    )
-
-    return result
+    df = df.dropna(
+        subset=["forecast_date", "hour_ending", "forecast_load_mw", "vintage_label"],
+    ).copy()
+    df["hour_ending"] = df["hour_ending"].astype(int)
+    return df

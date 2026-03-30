@@ -1,4 +1,5 @@
--- Meteologica demand forecast (RTO), latest execution per target date.
+-- Meteologica demand forecast, latest execution per target date.
+-- Parameterized by {region} (default RTO).
 -- Returns the most recent forecast vintage for each (date, hour_ending)
 -- from today onward (forward-looking only).
 with params as (

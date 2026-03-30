@@ -1,4 +1,4 @@
-"""Pull Meteologica ECMWF ensemble RTO load forecast (latest vintage strip)."""
+"""Pull Meteologica ECMWF ensemble load forecast (latest vintage strip)."""
 from pathlib import Path
 
 import pandas as pd
@@ -9,6 +9,8 @@ from src.data.sql_templates import render_sql_template
 
 logger = logging.getLogger(__name__)
 SQL_DIR = Path(__file__).parent / "sql"
+
+REGIONS = ["RTO", "WEST", "MIDATL", "SOUTH"]
 
 
 def pull_strip(
@@ -27,3 +29,16 @@ def pull_strip(
     df["forecast_date"] = pd.to_datetime(df["forecast_date"]).dt.date
     logger.info(f"Pulled {len(df):,} rows")
     return df
+
+
+def pull_strip_all_regions() -> pd.DataFrame:
+    """Pull latest Euro ensemble strip for ALL regions in one DataFrame."""
+    frames: list[pd.DataFrame] = []
+    for region in REGIONS:
+        df = pull_strip(region=region)
+        if df is not None and len(df) > 0:
+            df["region"] = region
+            frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True)

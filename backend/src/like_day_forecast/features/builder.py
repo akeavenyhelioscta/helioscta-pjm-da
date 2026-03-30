@@ -2,6 +2,8 @@
 
 Produces one row per date with all features needed for similarity matching.
 """
+from datetime import date, timedelta
+
 import pandas as pd
 import numpy as np
 import logging
@@ -96,7 +98,7 @@ def build_daily_features(
     df_rt_load = pull_with_cache(
         source_name="load_rt_metered_hourly",
         pull_fn=load_rt_metered_hourly.pull,
-        pull_kwargs={"schema": schema},
+        pull_kwargs={"schema": schema, "region": configs.LOAD_REGION},
         **cache_kwargs,
     )
 
@@ -240,3 +242,169 @@ def build_daily_features(
     logger.info(f"Daily feature matrix: {n_rows:,} days, {n_features} features, {date_range}")
 
     return result
+
+
+# ── Synthetic reference row for rolling-reference strip forecast ─────
+
+
+def build_synthetic_reference_row(
+    df_features: pd.DataFrame,
+    today: date,
+    target_date: date,
+    df_weather: pd.DataFrame | None = None,
+    df_solar_forecast: pd.DataFrame | None = None,
+    df_wind_forecast: pd.DataFrame | None = None,
+    df_outage_forecast: pd.DataFrame | None = None,
+) -> pd.Series:
+    """Build a synthetic feature row for a future reference date.
+
+    Clones today's actual features (LMP, gas, load, weather reference,
+    composites, renewables, outage reference) and replaces:
+      - Calendar columns → recomputed for ``target_date - 1``
+      - Target-date columns (tgt_*) → from forecast data for ``target_date``
+
+    This allows ``find_analogs()`` to run with correct DOW matching and
+    forward-looking weather/renewable/outage signals for each strip day
+    without modifying the engine.
+
+    Args:
+        df_features: Full daily feature matrix (from ``build_daily_features``).
+        today: The actual current date (must exist in *df_features*).
+        target_date: The forecast target date (D+N).
+        df_weather: Hourly weather with forecast rows for *target_date*.
+        df_solar_forecast: Hourly PJM solar forecast (``forecast_date``, ``solar_forecast``).
+        df_wind_forecast: Hourly PJM wind forecast (``forecast_date``, ``wind_forecast``).
+        df_outage_forecast: Daily outage forecast (``forecast_date``, outage MW columns).
+
+    Returns:
+        pd.Series with the same columns as *df_features*, dated at
+        ``target_date - 1`` (the synthetic reference date).
+    """
+    today_mask = df_features["date"] == today
+    if not today_mask.any():
+        raise ValueError(f"Today ({today}) not found in feature matrix")
+
+    row = df_features.loc[today_mask].iloc[0].copy()
+    ref_date = target_date - timedelta(days=1)
+    row["date"] = ref_date
+
+    # ── 1. Calendar features ────────────────────────────────────────
+    cal = calendar_features.compute_for_date(ref_date)
+    for col, val in cal.items():
+        if col in row.index:
+            row[col] = val
+
+    # ── 2. Target weather features ──────────────────────────────────
+    if df_weather is not None and len(df_weather):
+        _apply_target_weather(row, df_weather, target_date)
+
+    # ── 3. Target renewable features ────────────────────────────────
+    _apply_target_renewables(row, df_solar_forecast, df_wind_forecast, target_date)
+
+    # ── 4. Target outage features ───────────────────────────────────
+    if df_outage_forecast is not None and len(df_outage_forecast):
+        _apply_target_outages(row, df_outage_forecast, target_date)
+
+    return row
+
+
+def _apply_target_weather(
+    row: pd.Series,
+    df_weather: pd.DataFrame,
+    target_date: date,
+) -> None:
+    """Replace tgt_weather columns in *row* using forecast weather for *target_date*."""
+    wf = df_weather[df_weather["date"] == target_date]
+    if wf.empty:
+        logger.warning(
+            f"No weather forecast for {target_date}; keeping today's tgt_weather values"
+        )
+        return
+
+    if "temp" in wf.columns:
+        avg_temp = wf["temp"].mean()
+        row["tgt_temp_daily_avg"] = avg_temp
+        row["tgt_temp_daily_max"] = wf["temp"].max()
+        row["tgt_temp_daily_min"] = wf["temp"].min()
+        hdd_base, cdd_base = 65.0, 65.0
+        row["tgt_hdd"] = max(0.0, hdd_base - avg_temp)
+        row["tgt_cdd"] = max(0.0, avg_temp - cdd_base)
+        if "temp_daily_avg" in row.index and pd.notna(row["temp_daily_avg"]):
+            row["tgt_temp_change_vs_ref"] = avg_temp - row["temp_daily_avg"]
+
+    if "feels_like_temp" in wf.columns and "tgt_feels_like_daily_avg" in row.index:
+        row["tgt_feels_like_daily_avg"] = wf["feels_like_temp"].mean()
+
+
+def _apply_target_renewables(
+    row: pd.Series,
+    df_solar: pd.DataFrame | None,
+    df_wind: pd.DataFrame | None,
+    target_date: date,
+) -> None:
+    """Replace tgt_renewable columns using solar/wind forecasts for *target_date*."""
+    solar_avg = None
+    wind_avg = None
+
+    if df_solar is not None and len(df_solar):
+        sf = df_solar[df_solar["forecast_date"] == target_date]
+        if len(sf) and "solar_forecast" in sf.columns:
+            solar_avg = sf["solar_forecast"].mean()
+            row["tgt_solar_daily_avg"] = solar_avg
+
+    if df_wind is not None and len(df_wind):
+        wf = df_wind[df_wind["forecast_date"] == target_date]
+        if len(wf) and "wind_forecast" in wf.columns:
+            wind_avg = wf["wind_forecast"].mean()
+            row["tgt_wind_daily_avg"] = wind_avg
+
+    if solar_avg is None and wind_avg is None:
+        logger.warning(
+            f"No renewable forecast for {target_date}; keeping today's tgt_renewable values"
+        )
+        return
+
+    s = solar_avg if solar_avg is not None else row.get("tgt_solar_daily_avg", 0.0)
+    w = wind_avg if wind_avg is not None else row.get("tgt_wind_daily_avg", 0.0)
+    s = float(s) if pd.notna(s) else 0.0
+    w = float(w) if pd.notna(w) else 0.0
+    row["tgt_renewable_daily_avg"] = s + w
+
+    if "renewable_daily_avg" in row.index and pd.notna(row["renewable_daily_avg"]):
+        row["tgt_renewable_change_vs_ref"] = (
+            row["tgt_renewable_daily_avg"] - row["renewable_daily_avg"]
+        )
+
+
+def _apply_target_outages(
+    row: pd.Series,
+    df_outage_forecast: pd.DataFrame,
+    target_date: date,
+) -> None:
+    """Replace tgt_outage columns using outage forecast for *target_date*."""
+    # Use latest execution for the target date, RTO region
+    of = df_outage_forecast.copy()
+    if "region" in of.columns:
+        of = of[of["region"] == "RTO"]
+    of = of[of["forecast_date"] == target_date]
+    if of.empty:
+        logger.warning(
+            f"No outage forecast for {target_date}; keeping today's tgt_outage values"
+        )
+        return
+
+    # Pick latest execution
+    if "forecast_execution_date" in of.columns:
+        of = of.sort_values("forecast_execution_date", ascending=False)
+    latest = of.iloc[0]
+
+    if "total_outages_mw" in latest.index:
+        row["tgt_outage_total_mw"] = latest["total_outages_mw"]
+    if "forced_outages_mw" in latest.index:
+        row["tgt_outage_forced_mw"] = latest["forced_outages_mw"]
+    if (
+        "outage_total_mw" in row.index
+        and pd.notna(row["outage_total_mw"])
+        and pd.notna(row.get("tgt_outage_total_mw"))
+    ):
+        row["tgt_outage_change_vs_ref"] = row["tgt_outage_total_mw"] - row["outage_total_mw"]

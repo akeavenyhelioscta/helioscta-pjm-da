@@ -4,7 +4,7 @@ with params as (
             when left('{region}', 1) = chr(123) and right('{region}', 1) = chr(125) then 'RTO'
             else coalesce(nullif('{region}', ''), 'RTO')
         end::text as region,
-        nullif(regexp_replace('{start_date}', '[^0-9-]', '', 'g'), '')::date as start_date,
+        coalesce(nullif(regexp_replace('{start_date}', '[^0-9-]', '', 'g'), '')::date, '2022-01-01'::date) as start_date,
         nullif(regexp_replace('{end_date}', '[^0-9-]', '', 'g'), '')::date as end_date
 )
 select

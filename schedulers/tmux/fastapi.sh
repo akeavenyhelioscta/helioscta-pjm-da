@@ -1,83 +1,81 @@
 #!/usr/bin/env bash
-# fastapi.sh — Manage the FastAPI backend tmux session
+# fastapi.sh — Manage the FastAPI backend server
 #
 # Usage:
-#   bash fastapi.sh start              # start the server (detached)
-#   bash fastapi.sh start --reload     # start with auto-reload (detached)
-#   bash fastapi.sh attach             # attach to the session
-#   bash fastapi.sh logs               # dump session output (without attaching)
-#   bash fastapi.sh stop               # kill the session
-#   bash fastapi.sh status             # show if session is running
+#   bash fastapi.sh start              # start the server (background)
+#   bash fastapi.sh start --reload     # start with auto-reload (background)
+#   bash fastapi.sh logs               # tail the log file
+#   bash fastapi.sh stop               # kill the server
+#   bash fastapi.sh status             # show if server is running
 set -euo pipefail
 
-SESSION="fastapi"
 BACKEND_DIR="$HOME/Documents/github/helioscta-pjm-da/backend"
 CONDA_ENV="helioscta-pjm-da"
 HOST="${FASTAPI_HOST:-0.0.0.0}"
 PORT="${FASTAPI_PORT:-8000}"
 RELOAD_FLAG="${2:-}"
 
-PREAMBLE="source ~/miniconda3/etc/profile.d/conda.sh && cd '$BACKEND_DIR' && conda activate $CONDA_ENV"
-
-if [[ "$RELOAD_FLAG" == "--reload" ]]; then
-    CMD_SERVER="$PREAMBLE && uvicorn src.api.main:app --host $HOST --port $PORT --reload"
-else
-    CMD_SERVER="$PREAMBLE && uvicorn src.api.main:app --host $HOST --port $PORT"
-fi
+PID_FILE="$BACKEND_DIR/.fastapi.pid"
+LOG_FILE="$BACKEND_DIR/.fastapi.log"
 
 usage() {
-    echo "Usage: bash $0 {start [--reload]|attach|logs|stop|status}"
+    echo "Usage: bash $0 {start [--reload]|logs|stop|status}"
     exit 1
 }
 
 is_running() {
-    tmux has-session -t "$SESSION" 2>/dev/null
+    [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
 }
 
 case "${1:-}" in
     start)
         if is_running; then
-            echo "Session '$SESSION' already running. Use 'stop' first or 'attach' to view."
+            echo "Server already running (PID $(cat "$PID_FILE")). Use 'stop' first."
             exit 1
         fi
-        tmux new-session -d -s "$SESSION" "$CMD_SERVER"
-        echo "Started FastAPI server on $HOST:$PORT in tmux session '$SESSION'"
+
+        RELOAD_ARG=""
+        [[ "$RELOAD_FLAG" == "--reload" ]] && RELOAD_ARG="--reload"
+
+        source ~/miniconda3/etc/profile.d/conda.sh
+        conda activate "$CONDA_ENV"
+        cd "$BACKEND_DIR"
+
+        nohup uvicorn src.api.main:app --host "$HOST" --port "$PORT" $RELOAD_ARG \
+            > "$LOG_FILE" 2>&1 &
+        echo $! > "$PID_FILE"
+
+        echo "Started FastAPI server on $HOST:$PORT (PID $(cat "$PID_FILE"))"
         [[ "$RELOAD_FLAG" == "--reload" ]] && echo "  (auto-reload enabled)"
-        echo "  attach:  bash $0 attach"
+        echo "  logs:    bash $0 logs"
         echo "  stop:    bash $0 stop"
         ;;
 
-    attach)
-        if ! is_running; then
-            echo "No session '$SESSION' running."
-            exit 1
-        fi
-        tmux attach -t "$SESSION"
-        ;;
-
     logs)
-        if ! is_running; then
-            echo "No session '$SESSION' running."
+        if [[ ! -f "$LOG_FILE" ]]; then
+            echo "No log file found."
             exit 1
         fi
-        tmux capture-pane -t "$SESSION" -p -S -500
+        tail -f "$LOG_FILE"
         ;;
 
     stop)
         if ! is_running; then
-            echo "No session '$SESSION' running."
+            echo "Server is not running."
+            rm -f "$PID_FILE"
             exit 0
         fi
-        tmux kill-session -t "$SESSION"
-        echo "Stopped session '$SESSION'"
+        kill "$(cat "$PID_FILE")"
+        rm -f "$PID_FILE"
+        echo "Server stopped."
         ;;
 
     status)
         if is_running; then
-            echo "Session '$SESSION' is RUNNING"
-            tmux ls | grep "$SESSION"
+            echo "Server is RUNNING (PID $(cat "$PID_FILE"))"
         else
-            echo "Session '$SESSION' is NOT running"
+            echo "Server is NOT running"
+            rm -f "$PID_FILE"
         fi
         ;;
 

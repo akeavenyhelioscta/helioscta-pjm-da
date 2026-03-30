@@ -13,7 +13,7 @@ import plotly.graph_objects as go
 
 from src.like_day_forecast import configs
 from src.like_day_forecast.pipelines.forecast import run as run_forecast
-from src.views.forecast_results import build_view_model
+from src.views.like_day_forecast_results import build_view_model
 
 logger = logging.getLogger(__name__)
 

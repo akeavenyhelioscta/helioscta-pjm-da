@@ -64,17 +64,19 @@ def build_fragments(
     df_da = pull_with_cache(
         source_name="lmps_hourly_da",
         pull_fn=lmps_hourly.pull,
-        pull_kwargs={"schema": schema, "hub": configs.HUB, "market": "da"},
+        pull_kwargs={"schema": schema, "market": "da"},
         **cache_kwargs,
     )
+    df_da = df_da[df_da["hub"] == configs.HUB]
 
     logger.info("Pulling RT LMP hourly...")
     df_rt = pull_with_cache(
         source_name="lmps_hourly_rt",
         pull_fn=lmps_hourly.pull,
-        pull_kwargs={"schema": schema, "hub": configs.HUB, "market": "rt"},
+        pull_kwargs={"schema": schema, "market": "rt"},
         **cache_kwargs,
     )
+    df_rt = df_rt[df_rt["hub"] == configs.HUB]
 
     df_da = _prep(df_da)
     df_rt = _prep(df_rt)

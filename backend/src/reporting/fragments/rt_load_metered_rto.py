@@ -51,13 +51,13 @@ def build_fragments(
     df_rt_raw = pull_with_cache(
         source_name="load_rt_metered_hourly",
         pull_fn=load_rt_metered_hourly.pull,
-        pull_kwargs={"schema": schema, "region": configs.LOAD_REGION},
+        pull_kwargs={},
         cache_dir=cache_dir,
         cache_enabled=cache_enabled,
         ttl_hours=cache_ttl_hours,
         force_refresh=force_refresh,
     )
-    df_rt = df_rt_raw.copy()
+    df_rt = df_rt_raw[df_rt_raw["region"] == configs.LOAD_REGION].copy()
     df_rt["date"] = pd.to_datetime(df_rt["date"])
 
     logger.info("Building load features...")
