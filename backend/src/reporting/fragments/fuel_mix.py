@@ -49,7 +49,7 @@ def build_fragments(
 
     logger.info("Pulling fuel mix hourly...")
     df_raw = pull_with_cache(
-        source_name="fuel_mix_hourly",
+        source_name="pjm_fuel_mix_hourly",
         pull_fn=fuel_mix_hourly.pull,
         pull_kwargs={},
         **cache_kwargs,
@@ -59,7 +59,7 @@ def build_fragments(
 
     logger.info("Pulling RT LMP hourly...")
     df_lmp_rt = pull_with_cache(
-        source_name="lmps_hourly_rt",
+        source_name="pjm_lmps_hourly_rt",
         pull_fn=lmps_hourly.pull,
         pull_kwargs={"schema": schema, "market": "rt"},
         **cache_kwargs,

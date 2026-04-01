@@ -21,7 +21,16 @@ from src.like_day_forecast.features.builder import (
     build_synthetic_reference_row,
 )
 from src.like_day_forecast.similarity.engine import find_analogs
-from src.data import lmps_hourly, weather_hourly, pjm_solar_forecast_hourly, pjm_wind_forecast_hourly, outages_forecast_daily
+from src.data import (
+    lmps_hourly,
+    weather_hourly,
+    pjm_solar_forecast_hourly,
+    pjm_wind_forecast_hourly,
+    solar_forecast_vintages,
+    wind_forecast_vintages,
+    outages_forecast_daily,
+    pjm_load_forecast_hourly,
+)
 from src.like_day_forecast.pipelines.forecast import (
     weighted_quantile,
     _add_summary_cols,
@@ -98,6 +107,9 @@ def run_strip(
     df_features = build_daily_features(
         schema=config.schema,
         hub=config.hub,
+        renewable_mode=config.resolved_renewable_mode(),
+        renewable_region=config.renewable_forecast_region,
+        renewable_blend_pjm_weight=config.renewable_blend_weight(offset=1),
         cache_dir=cache_dir,
         cache_enabled=cache_enabled,
         cache_ttl_hours=cache_ttl_hours,
@@ -116,20 +128,29 @@ def run_strip(
     # ── 2. Pull ALL hourly DA LMP data (once) ───────────────────────
     logger.info("Pulling hourly DA LMP data...")
     df_lmp_all = pull_with_cache(
-        source_name="lmps_hourly_da",
+        source_name="pjm_lmps_hourly_da",
         pull_fn=lmps_hourly.pull,
-        pull_kwargs={"schema": config.schema, "hub": config.hub, "market": "da"},
+        pull_kwargs={"schema": config.schema, "market": "da"},
         **cache_kwargs,
     )
+    df_lmp_all = df_lmp_all[df_lmp_all["hub"] == config.hub].copy()
     df_lmp_all["date"] = pd.to_datetime(df_lmp_all["date"]).dt.date
 
     # ── 3. Pull multi-day forecast data for synthetic rows ──────────
     logger.info("Pulling multi-day forecast data for synthetic references...")
+    renewable_mode = config.resolved_renewable_mode()
+    logger.info(
+        "Renewable forecast mode=%s (region=%s, blend D+1=%.2f D+4=%.2f)",
+        renewable_mode,
+        config.renewable_forecast_region,
+        config.renewable_blend_weight(offset=1),
+        config.renewable_blend_weight(offset=4),
+    )
 
     df_weather_all = None
     try:
         df_weather_all = pull_with_cache(
-            source_name="weather_hourly",
+            source_name="wsi_weather_hourly",
             pull_fn=weather_hourly.pull,
             pull_kwargs={},
             **cache_kwargs,
@@ -159,16 +180,59 @@ def run_strip(
     except Exception as e:
         logger.warning(f"PJM wind multi-day forecast pull failed: {e}")
 
+    df_meteo_solar_multi = None
+    try:
+        df_solar_vintages = pull_with_cache(
+            source_name="meteologica_solar_forecast_vintages",
+            pull_fn=solar_forecast_vintages.pull_meteologica_vintages,
+            pull_kwargs={},
+            **cache_kwargs,
+        )
+        df_meteo_solar_multi = df_solar_vintages[
+            (df_solar_vintages["vintage_label"] == "Latest")
+            & (df_solar_vintages["region"] == config.renewable_forecast_region)
+        ].copy()
+        df_meteo_solar_multi = df_meteo_solar_multi.rename(columns={"forecast_mw": "forecast_generation_mw"})
+    except Exception as e:
+        logger.warning(f"Meteologica solar multi-day forecast pull failed: {e}")
+
+    df_meteo_wind_multi = None
+    try:
+        df_wind_vintages = pull_with_cache(
+            source_name="meteologica_wind_forecast_vintages",
+            pull_fn=wind_forecast_vintages.pull_meteologica_vintages,
+            pull_kwargs={},
+            **cache_kwargs,
+        )
+        df_meteo_wind_multi = df_wind_vintages[
+            (df_wind_vintages["vintage_label"] == "Latest")
+            & (df_wind_vintages["region"] == config.renewable_forecast_region)
+        ].copy()
+        df_meteo_wind_multi = df_meteo_wind_multi.rename(columns={"forecast_mw": "forecast_generation_mw"})
+    except Exception as e:
+        logger.warning(f"Meteologica wind multi-day forecast pull failed: {e}")
+
     df_outage_multi = None
     try:
         df_outage_multi = pull_with_cache(
-            source_name="outages_forecast_daily",
+            source_name="pjm_outages_forecast_daily",
             pull_fn=outages_forecast_daily.pull,
-            pull_kwargs={"schema": config.schema},
+            pull_kwargs={"lookback_days": 14},
             **cache_kwargs,
         )
     except Exception as e:
         logger.warning(f"Outage forecast pull failed: {e}")
+
+    df_load_forecast_multi = None
+    try:
+        df_load_forecast_multi = pull_with_cache(
+            source_name="pjm_load_forecast_latest",
+            pull_fn=pjm_load_forecast_hourly.pull,
+            pull_kwargs={"region": configs.LOAD_REGION},
+            **cache_kwargs,
+        )
+    except Exception as e:
+        logger.warning(f"Load forecast pull failed: {e}")
 
     # ── 4. Per-day analog selection + forecast ──────────────────────
     analog_kwargs = dict(
@@ -176,6 +240,8 @@ def run_strip(
         feature_weights=config.resolved_weights(),
         apply_calendar_filter=config.apply_calendar_filter,
         apply_regime_filter=config.apply_regime_filter,
+        apply_outage_regime_filter=config.apply_outage_regime_filter,
+        outage_tolerance_std=config.outage_tolerance_std,
         season_window_days=config.season_window_days,
         same_dow_group=config.same_dow_group,
         weight_method=config.weight_method,
@@ -197,6 +263,7 @@ def run_strip(
 
     for offset, target_date in enumerate(forecast_dates, start=1):
         synthetic_ref_date = target_date - timedelta(days=1)
+        renewable_blend_weight = config.renewable_blend_weight(offset=offset)
         logger.info(f"--- D+{offset}: {target_date} ({DAY_ABBR[target_date.weekday()]}) "
                      f"| ref={synthetic_ref_date} ---")
 
@@ -215,9 +282,14 @@ def run_strip(
                 today=ref_date,
                 target_date=target_date,
                 df_weather=df_weather_all,
-                df_solar_forecast=df_solar_multi,
-                df_wind_forecast=df_wind_multi,
+                df_pjm_solar_forecast=df_solar_multi,
+                df_pjm_wind_forecast=df_wind_multi,
+                df_meteo_solar_forecast=df_meteo_solar_multi,
+                df_meteo_wind_forecast=df_meteo_wind_multi,
+                renewable_mode=renewable_mode,
+                renewable_blend_weight_pjm=renewable_blend_weight,
                 df_outage_forecast=df_outage_multi,
+                df_load_forecast=df_load_forecast_multi,
             )
 
             # Remove today (ref_date) and any pre-existing row at synthetic_ref_date.

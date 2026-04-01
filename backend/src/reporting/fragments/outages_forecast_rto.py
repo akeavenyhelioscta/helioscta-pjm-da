@@ -49,7 +49,7 @@ def build_fragments(
     )
 
     df = _safe_pull(
-        "outages_forecast_daily",
+        "pjm_outages_forecast_daily",
         outages_forecast_daily.pull,
         {"lookback_days": 14},
         **cache_kwargs,

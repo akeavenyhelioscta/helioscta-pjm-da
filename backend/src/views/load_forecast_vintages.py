@@ -336,13 +336,13 @@ if __name__ == "__main__":
     )
 
     df_pjm = pull_with_cache(
-        source_name="forecast_vintage_pjm",
+        source_name="pjm_load_forecast_vintages",
         pull_fn=load_forecast_vintages.pull_combined_vintages,
         pull_kwargs={"source": "pjm"},
         **CACHE,
     )
     df_meteo = pull_with_cache(
-        source_name="forecast_vintage_meteologica",
+        source_name="meteologica_load_forecast_vintages",
         pull_fn=load_forecast_vintages.pull_combined_vintages,
         pull_kwargs={"source": "meteologica"},
         **CACHE,

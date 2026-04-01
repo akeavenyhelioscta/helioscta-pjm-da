@@ -17,7 +17,7 @@ def pull(
     sql_overrides: dict[str, str | int | bool | None] | None = None,
 ) -> pd.DataFrame:
     """Pull actual daily outages (total/planned/maintenance/forced MW)."""
-    sql_file = SQL_DIR / "outages_actual_daily.sql"
+    sql_file = SQL_DIR / "pjm_outages_actual_daily.sql"
     overrides: dict[str, str | int | bool | None] = {"schema": schema, "region": region}
     if sql_overrides:
         overrides.update(sql_overrides)
@@ -28,7 +28,7 @@ def pull(
     df["date"] = pd.to_datetime(df["date"]).dt.date
     df = validate_source_frame(
         df=df,
-        source_name="outages_actual_daily",
+        source_name="pjm_outages_actual_daily",
         required_columns=["date", "region", "total_outages_mw", "forced_outages_mw"],
         unique_key_columns=["date", "region"],
         drop_duplicate_keys=True,

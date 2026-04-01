@@ -6,6 +6,8 @@ import logging
 from enum import Enum
 from pathlib import Path
 
+import pandas as pd
+
 import src.settings  # noqa: F401 — load env vars
 
 from fastapi import FastAPI, Query
@@ -15,7 +17,9 @@ from fastapi_mcp import FastApiMCP
 
 from src.like_day_forecast import configs
 from src.like_day_forecast.pipelines.forecast import run as run_forecast
-from src.data import outages_actual_daily, outages_forecast_daily, load_forecast_vintages, solar_forecast_vintages, wind_forecast_vintages, lmps_hourly, fuel_mix_hourly, transmission_outages
+from src.like_day_forecast.pipelines.market_adjusted_forecast import run as run_adjusted_forecast
+from src.like_day_forecast.pipelines.regression_adjusted_forecast import run as run_regression_forecast
+from src.data import outages_actual_daily, outages_forecast_daily, load_forecast_vintages, solar_forecast_vintages, wind_forecast_vintages, lmps_hourly, fuel_mix_hourly, transmission_outages, ice_power_intraday, meteologica_da_price_forecast
 from src.utils.cache_utils import pull_with_cache
 from src.views.like_day_forecast_results import build_view_model as forecast_view_model
 from src.views.like_day_strip_forecast_results import build_view_model as strip_view_model
@@ -26,6 +30,8 @@ from src.views.lmp_7_day_lookback_western_hub import build_view_model as lmp_7da
 from src.views.fuel_mix_7_day_lookback import build_view_model as fuel_mix_view_model
 from src.views.transmission_outages import build_view_model as tx_outage_view_model
 from src.views.outages_forecast_vintages import build_view_model as outage_fcst_view_model
+from src.views.ice_power_intraday import build_view_model as ice_power_view_model
+from src.views.meteologica_da_forecast import build_view_model as meteo_da_view_model
 from src.views.markdown_formatters import (
     format_lmp_7day,
     format_like_day_forecast_results,
@@ -36,6 +42,8 @@ from src.views.markdown_formatters import (
     format_fuel_mix_7day,
     format_transmission_outages,
     format_outages_forecast_vintages,
+    format_ice_power_intraday,
+    format_meteologica_da_forecast,
 )
 
 
@@ -93,6 +101,95 @@ def get_like_day_forecast_results(
     return PlainTextResponse(content=format_like_day_forecast_results(vm), media_type="text/markdown")
 
 
+@app.get("/views/market_adjusted_forecast")
+def get_market_adjusted_forecast(
+    market_onpeak: float = Query(..., description="ICE or broker on-peak price anchor ($/MWh)"),
+    market_offpeak: float | None = Query(None, description="Off-peak anchor ($/MWh). If omitted, shifted by same delta as on-peak."),
+    forecast_date: str | None = Query(None, description="YYYY-MM-DD, defaults to tomorrow"),
+    format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
+):
+    """Rescale the like-day forecast hourly shape to a market-observed price level."""
+    result = run_adjusted_forecast(
+        market_onpeak=market_onpeak,
+        market_offpeak=market_offpeak,
+        forecast_date=forecast_date,
+        config=configs.ScenarioConfig(forecast_date=forecast_date),
+        cache_dir=configs.CACHE_DIR,
+        cache_enabled=configs.CACHE_ENABLED,
+        cache_ttl_hours=configs.CACHE_TTL_HOURS,
+        force_refresh=configs.FORCE_CACHE_REFRESH,
+    )
+    vm = forecast_view_model(result)
+    if format == OutputFormat.json:
+        return {**vm, "adjustment": result.get("adjustment")}
+    md = format_like_day_forecast_results(vm)
+    adj = result.get("adjustment", {})
+    header = (
+        f"# Market-Adjusted Forecast\n\n"
+        f"**Anchor:** On-Peak ${adj.get('market_onpeak', 0):.2f} | "
+        f"Off-Peak ${adj.get('market_offpeak', 0):.2f}\n"
+        f"**Model base:** On-Peak ${adj.get('base_onpeak', 0):.2f} | "
+        f"Off-Peak ${adj.get('base_offpeak', 0):.2f}\n"
+        f"**Delta:** On-Peak {adj.get('onpeak_delta', 0):+.2f} | "
+        f"Off-Peak {adj.get('offpeak_delta', 0):+.2f}\n\n"
+    )
+    return PlainTextResponse(content=header + md, media_type="text/markdown")
+
+
+@app.get("/views/regression_adjusted_forecast")
+def get_regression_adjusted_forecast(
+    forecast_date: str | None = Query(None, description="YYYY-MM-DD, defaults to tomorrow"),
+    format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
+):
+    """Apply regression correction based on fundamental deltas vs analog-weighted averages."""
+    result = run_regression_forecast(
+        forecast_date=forecast_date,
+        config=configs.ScenarioConfig(forecast_date=forecast_date),
+        cache_dir=configs.CACHE_DIR,
+        cache_enabled=configs.CACHE_ENABLED,
+        cache_ttl_hours=configs.CACHE_TTL_HOURS,
+        force_refresh=configs.FORCE_CACHE_REFRESH,
+    )
+    vm = forecast_view_model(result)
+    if format == OutputFormat.json:
+        adj = result.get("adjustment", {})
+        deltas_json = [
+            {
+                "factor": d.label, "unit": d.unit,
+                "today": d.today_value, "analog_avg": d.analog_avg,
+                "delta": d.delta,
+                "adj_onpeak": d.adj_onpeak, "adj_offpeak": d.adj_offpeak,
+            }
+            for d in result.get("deltas", [])
+        ]
+        return {**vm, "adjustment": adj, "deltas": deltas_json}
+    # Markdown
+    adj = result.get("adjustment", {})
+    deltas = result.get("deltas", [])
+    header = (
+        f"# Regression-Adjusted Forecast\n\n"
+        f"**Total adjustment:** On-Peak {adj.get('total_onpeak', 0):+.2f} | "
+        f"Off-Peak {adj.get('total_offpeak', 0):+.2f}\n"
+        f"**Model:** On-Peak ${adj.get('base_onpeak', 0):.2f} | "
+        f"Off-Peak ${adj.get('base_offpeak', 0):.2f}\n"
+        f"**Adjusted:** On-Peak ${adj.get('adj_onpeak', 0):.2f} | "
+        f"Off-Peak ${adj.get('adj_offpeak', 0):.2f}\n\n"
+        f"## Fundamental Deltas\n"
+        f"| Factor | Today | Analog Avg | Delta | Adj OnPk | Adj OffPk |\n"
+        f"|--------|-------|-----------|-------|----------|----------|\n"
+    )
+    for d in deltas:
+        if d.unit == "MW":
+            header += (f"| {d.label} | {d.today_value:,.0f} MW | {d.analog_avg:,.0f} MW | "
+                       f"{d.delta:+,.0f} | {d.adj_onpeak:+.2f} | {d.adj_offpeak:+.2f} |\n")
+        else:
+            header += (f"| {d.label} | ${d.today_value:.2f} | ${d.analog_avg:.2f} | "
+                       f"{d.delta:+.2f} | {d.adj_onpeak:+.2f} | {d.adj_offpeak:+.2f} |\n")
+    header += f"| **Total** | | | | **{adj.get('total_onpeak', 0):+.2f}** | **{adj.get('total_offpeak', 0):+.2f}** |\n\n"
+    md = format_like_day_forecast_results(vm)
+    return PlainTextResponse(content=header + md, media_type="text/markdown")
+
+
 @app.get("/views/like_day_strip_forecast_results")
 def get_like_day_strip_forecast_results(
     horizon: int = Query(3, description="Number of days ahead to forecast (1-7)"),
@@ -117,7 +214,7 @@ def get_outage_term_bible(
 ):
     """Return the outage term bible view model with historical context."""
     df = pull_with_cache(
-        source_name="outages_actual_daily",
+        source_name="pjm_outages_actual_daily",
         pull_fn=outages_actual_daily.pull,
         pull_kwargs={"schema": configs.SCHEMA},
         **CACHE_KWARGS,
@@ -134,13 +231,13 @@ def get_load_forecast_vintages(
 ):
     """Return load forecast vintage evolution across all regions for PJM and Meteologica."""
     df_pjm = pull_with_cache(
-        source_name="forecast_vintage_pjm",
+        source_name="pjm_load_forecast_vintages",
         pull_fn=load_forecast_vintages.pull_combined_vintages,
         pull_kwargs={"source": "pjm"},
         **CACHE_KWARGS,
     )
     df_meteo = pull_with_cache(
-        source_name="forecast_vintage_meteologica",
+        source_name="meteologica_load_forecast_vintages",
         pull_fn=load_forecast_vintages.pull_combined_vintages,
         pull_kwargs={"source": "meteologica"},
         **CACHE_KWARGS,
@@ -156,12 +253,19 @@ def get_solar_forecast_vintages(
     format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
 ):
     """Return solar forecast vintage evolution across all regions for PJM and Meteologica."""
-    df = pull_with_cache(
-        source_name="solar_vintage_combined",
-        pull_fn=solar_forecast_vintages.pull_combined_vintages,
+    df_pjm = pull_with_cache(
+        source_name="pjm_solar_forecast_vintages",
+        pull_fn=solar_forecast_vintages.pull_pjm_vintages,
         pull_kwargs={},
         **CACHE_KWARGS,
     )
+    df_meteo = pull_with_cache(
+        source_name="meteologica_solar_forecast_vintages",
+        pull_fn=solar_forecast_vintages.pull_meteologica_vintages,
+        pull_kwargs={},
+        **CACHE_KWARGS,
+    )
+    df = pd.concat([df_pjm, df_meteo], ignore_index=True)
     vm = generation_view_model(df, forecast_type="solar")
     if format == OutputFormat.json:
         return vm
@@ -173,12 +277,19 @@ def get_wind_forecast_vintages(
     format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
 ):
     """Return wind forecast vintage evolution across all regions for PJM and Meteologica."""
-    df = pull_with_cache(
-        source_name="wind_vintage_combined",
-        pull_fn=wind_forecast_vintages.pull_combined_vintages,
+    df_pjm = pull_with_cache(
+        source_name="pjm_wind_forecast_vintages",
+        pull_fn=wind_forecast_vintages.pull_pjm_vintages,
         pull_kwargs={},
         **CACHE_KWARGS,
     )
+    df_meteo = pull_with_cache(
+        source_name="meteologica_wind_forecast_vintages",
+        pull_fn=wind_forecast_vintages.pull_meteologica_vintages,
+        pull_kwargs={},
+        **CACHE_KWARGS,
+    )
+    df = pd.concat([df_pjm, df_meteo], ignore_index=True)
     vm = generation_view_model(df, forecast_type="wind")
     if format == OutputFormat.json:
         return vm
@@ -192,21 +303,22 @@ def get_lmp_7_day_lookback_western_hub(
     """Return DA / RT / DART LMP history for Western Hub (last 7 days)."""
     from datetime import date, timedelta
 
-    start = str(date.today() - timedelta(days=7))
-    end = str(date.today())
+    start = date.today() - timedelta(days=7)
     hub = "WESTERN HUB"
     df_da = pull_with_cache(
-        source_name="lmps_hourly_da_western_hub_7d",
+        source_name="pjm_lmps_hourly_da",
         pull_fn=lmps_hourly.pull,
-        pull_kwargs={"market": "da", "hub": hub, "sql_overrides": {"start_date": start, "end_date": end}},
+        pull_kwargs={"schema": configs.SCHEMA, "market": "da"},
         **CACHE_KWARGS,
     )
+    df_da = df_da[(df_da["hub"] == hub) & (pd.to_datetime(df_da["date"]).dt.date >= start)]
     df_rt = pull_with_cache(
-        source_name="lmps_hourly_rt_western_hub_7d",
+        source_name="pjm_lmps_hourly_rt",
         pull_fn=lmps_hourly.pull,
-        pull_kwargs={"market": "rt", "hub": hub, "sql_overrides": {"start_date": start, "end_date": end}},
+        pull_kwargs={"schema": configs.SCHEMA, "market": "rt"},
         **CACHE_KWARGS,
     )
+    df_rt = df_rt[(df_rt["hub"] == hub) & (pd.to_datetime(df_rt["date"]).dt.date >= start)]
     vm = lmp_7day_view_model(df_da, df_rt)
     if format == OutputFormat.json:
         return vm
@@ -220,14 +332,14 @@ def get_fuel_mix_7_day_lookback(
     """Return hourly generation by fuel type for the last 7 days."""
     from datetime import date, timedelta
 
-    start = str(date.today() - timedelta(days=7))
-    end = str(date.today())
+    start = date.today() - timedelta(days=7)
     df = pull_with_cache(
-        source_name="fuel_mix_7d",
+        source_name="pjm_fuel_mix_hourly",
         pull_fn=fuel_mix_hourly.pull,
-        pull_kwargs={"sql_overrides": {"start_date": start, "end_date": end}},
+        pull_kwargs={},
         **CACHE_KWARGS,
     )
+    df = df[pd.to_datetime(df["date"]).dt.date >= start]
     vm = fuel_mix_view_model(df)
     if format == OutputFormat.json:
         return vm
@@ -240,7 +352,7 @@ def get_outages_forecast_vintages(
 ):
     """Return generation outage forecast vintages — how the 7-day outage forecast has evolved."""
     df = pull_with_cache(
-        source_name="outages_forecast_daily",
+        source_name="pjm_outages_forecast_daily",
         pull_fn=outages_forecast_daily.pull,
         pull_kwargs={"lookback_days": 14},
         **CACHE_KWARGS,
@@ -257,7 +369,7 @@ def get_transmission_outages(
 ):
     """Return active transmission outages: regional summary + notable individual outages."""
     df = pull_with_cache(
-        source_name="transmission_outages_active",
+        source_name="pjm_transmission_outages",
         pull_fn=transmission_outages.pull,
         pull_kwargs={},
         **CACHE_KWARGS,
@@ -266,6 +378,56 @@ def get_transmission_outages(
     if format == OutputFormat.json:
         return vm
     return PlainTextResponse(content=format_transmission_outages(vm), media_type="text/markdown")
+
+
+@app.get("/views/ice_power_intraday")
+def get_ice_power_intraday(
+    settle_lookback_days: int = Query(30, description="Lookback days for settlement history"),
+    intraday_lookback_days: int = Query(3, description="Lookback days for intraday tape"),
+    format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
+):
+    """Return ICE PJM power settlements and intraday snapshot tape."""
+    df_settles = pull_with_cache(
+        source_name="ice_power_settles",
+        pull_fn=ice_power_intraday.pull_settles,
+        pull_kwargs={"lookback_days": 30},
+        **CACHE_KWARGS,
+    )
+    df_intraday = pull_with_cache(
+        source_name="ice_power_intraday",
+        pull_fn=ice_power_intraday.pull_intraday,
+        pull_kwargs={"lookback_days": 3},
+        **CACHE_KWARGS,
+    )
+    vm = ice_power_view_model(df_settles, df_intraday)
+    if format == OutputFormat.json:
+        return vm
+    return PlainTextResponse(content=format_ice_power_intraday(vm), media_type="text/markdown")
+
+
+@app.get("/views/meteologica_da_forecast")
+def get_meteologica_da_forecast(
+    forecast_date: str | None = Query(None, description="YYYY-MM-DD, defaults to tomorrow"),
+    format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
+):
+    """Return Meteologica DA price forecast for a single date in like-day output format."""
+    from datetime import date, timedelta
+
+    if forecast_date:
+        target = pd.to_datetime(forecast_date).date()
+    else:
+        target = date.today() + timedelta(days=1)
+
+    df = pull_with_cache(
+        source_name="meteologica_da_price_forecast",
+        pull_fn=meteologica_da_price_forecast.pull,
+        pull_kwargs={},
+        **CACHE_KWARGS,
+    )
+    vm = meteo_da_view_model(df, forecast_date=target)
+    if format == OutputFormat.json:
+        return vm
+    return PlainTextResponse(content=format_meteologica_da_forecast(vm), media_type="text/markdown")
 
 
 # ── MCP integration — exposes all endpoints as agent tools ──────────

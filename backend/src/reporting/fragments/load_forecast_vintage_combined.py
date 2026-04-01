@@ -26,7 +26,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 
 from src.like_day_forecast import configs
-from src.data import meteologica_euro_ens_forecast, load_forecast_vintages
+from src.data import load_forecast_vintages
 from src.utils.cache_utils import pull_with_cache
 
 logger = logging.getLogger(__name__)
@@ -92,24 +92,17 @@ def build_fragments(
 
     # ── Pull data (one cache file per source, all regions) ──────
     pjm_all = _safe_pull(
-        "forecast_vintage_pjm",
+        "pjm_load_forecast_vintages",
         load_forecast_vintages.pull_combined_vintages,
         {"source": "pjm"},
         **cache_kwargs,
     )
     meteo_all = _safe_pull(
-        "forecast_vintage_meteologica",
+        "meteologica_load_forecast_vintages",
         load_forecast_vintages.pull_combined_vintages,
         {"source": "meteologica"},
         **cache_kwargs,
     )
-    euro_all = _safe_pull(
-        "meteologica_euro_ens",
-        meteologica_euro_ens_forecast.pull_strip_all_regions,
-        {},
-        **cache_kwargs,
-    )
-
     # Split into per-region dicts for chart building
     vintage_data: dict[str, dict[str, pd.DataFrame | None]] = {}
     euro_data: dict[str, pd.DataFrame | None] = {}
@@ -121,11 +114,7 @@ def build_fragments(
                 vintage_data[region][source_key] = sub if len(sub) > 0 else None
             else:
                 vintage_data[region][source_key] = None
-        if euro_all is not None and len(euro_all) > 0 and "region" in euro_all.columns:
-            sub = euro_all[euro_all["region"] == region]
-            euro_data[region] = sub if len(sub) > 0 else None
-        else:
-            euro_data[region] = None
+        euro_data[region] = None
 
     # ── Collect all dates for the global filter ──────────────────
     all_dates: set = set()

@@ -14,7 +14,7 @@ def pull(
     sql_overrides: dict[str, str | int | bool | None] | None = None,
 ) -> pd.DataFrame:
     """Pull PJM tie flows hourly. If tie_flow_name is None, pulls all tie flows."""
-    sql_file = SQL_DIR / "tie_flows_hourly.sql"
+    sql_file = SQL_DIR / "pjm_tie_flows_hourly.sql"
     overrides: dict[str, str | int | bool | None] = {"tie_flow_name": tie_flow_name or ""}
     if sql_overrides:
         overrides.update(sql_overrides)

@@ -42,38 +42,60 @@ LMP_COLS: list[str] = [
 FEATURE_COLS: list[str] = LMP_COLS
 
 # Analog selection defaults
-DEFAULT_N_ANALOGS: int = 30
+DEFAULT_N_ANALOGS: int = 15
 DEFAULT_N_DISPLAY: int = 5
 
 # Feature group weights for similarity (expert defaults)
 FEATURE_GROUP_WEIGHTS: dict[str, float] = {
-    "lmp_profile": 3.0,
+    "lmp_profile": 2.0,           # ↓ from 3.0: reduce circular LMP-shape matching
     "lmp_level": 2.0,
     "lmp_volatility": 1.0,
-    "load_level": 2.0,
-    "load_shape": 1.0,
-    "gas_price": 2.0,
-    "gas_momentum": 0.5,
-    "calendar_dow": 1.5,
+    "lmp_ramps": 2.0,              # evening/morning price ramp intensity
+    "load_level": 1.0,             # RTO aggregate — ref-day
+    "load_shape": 0.5,
+    "load_west_level": 1.5,        # Western Hub pricing zone — most relevant
+    "load_ramps": 1.5,             # morning + evening ramp shape (RTO + WEST)
+    "load_midatl_level": 1.0,      # Mid-Atlantic
+    "load_south_level": 0.5,       # South — least impact on W.Hub
+    "gas_hourly_level": 2.0,       # M3 + TZ5 daily avg, on/off-peak, max
+    "gas_hourly_shape": 1.5,       # intraday range, morning ramp — captures winter spikes
+    "gas_basis_spread": 1.5,       # M3-TZ5 basis — pipeline constraint signal
+    "calendar_dow": 0.5,            # ↓ from 1.5: pre-filter handles weekday/weekend; binary is_weekend only
     "calendar_season": 1.0,
-    "weather_level": 2.5,
-    "weather_hdd_cdd": 3.0,
-    "weather_wind": 0.5,
+    "weather_level": 0,             # disabled — load forecast already captures weather impact
+    "weather_hdd_cdd": 0,           # disabled
+    "weather_wind": 0,              # disabled
     "composite_heat_rate": 2.0,
-    "renewable_level": 2.5,
-    "renewable_shape": 1.0,
-    "outage_level": 2.0,
-    "outage_composition": 1.0,
-    "target_weather_level": 2.0,
-    "target_weather_hdd_cdd": 2.5,
-    "target_renewable_level": 2.5,
-    "target_outage_level": 1.5,
+    "renewable_level": 1.0,           # ↓ from 2.5: ref-day actuals are noise; target forecast matters
+    "renewable_shape": 0.5,           # ↓ from 1.0: same logic
+    "outage_level": 4.0,           # ↑ from 3.0: outages are primary supply driver; helps pull in year-ago analogs with similar outage regimes
+    "outage_composition": 2.0,     # ↑ from 1.0: forced vs planned distinction matters
+    "nuclear_level": 2.0,          # nuclear baseload supply floor
+    "congestion_level": 2.0,       # transmission constraint signal
+    "fuel_mix_shares": 1.5,        # dispatch stack composition
+    "net_load_level": 2.5,         # thermal generation requirement (load - renewables)
+    "net_load_ramps": 2.0,         # evening/morning thermal ramp intensity
+    "target_weather_level": 0,      # disabled — load forecast captures weather impact
+    "target_weather_hdd_cdd": 0,    # disabled
+    "target_renewable_level": 3.0,  # ↑ from 2.5: solar/wind forecast critical for midday
+    "target_outage_level": 4.0,    # ↑ from 3.0: D+1 RTO outage forecast — critical for spring maintenance season analog matching
+    "target_outage_west_level": 2.0, # D+1 WEST outage forecast — W.Hub pricing zone
+    "target_load_level": 1.5,       # D+1 RTO load forecast (PJM Latest vintage)
+    "target_load_west_level": 2.0,  # D+1 WEST — most relevant for W.Hub
+    "target_load_ramps": 2.0,       # D+1 morning + evening ramp forecast (RTO + WEST)
+    "target_load_midatl_level": 1.0,
+    "target_load_south_level": 0.5,
+    "target_meteo_load_level": 1.5,  # Meteologica independent load forecast
 }
 
 # Pre-filtering defaults
 FILTER_SAME_DOW_GROUP: bool = True
 FILTER_SEASON_WINDOW_DAYS: int = 30
 FILTER_MIN_POOL_SIZE: int = 20
+
+# Outage regime filter: ensure candidate pool matches target outage environment
+FILTER_OUTAGE_REGIME: bool = True
+FILTER_OUTAGE_TOLERANCE_STD: float = 1.0  # keep candidates within ±1 std of target outage z-score
 
 # Adaptive filtering for extreme regimes
 ADAPTIVE_FILTER_ENABLED: bool = True
@@ -106,6 +128,12 @@ GAS_HH_COL: str = "gas_hh_price"
 # Load region
 LOAD_REGION: str = "RTO"
 
+# Renewable forecast sources
+RENEWABLE_FORECAST_MODE: str = os.getenv("RENEWABLE_FORECAST_MODE", "blend").lower()
+RENEWABLE_FORECAST_REGION: str = os.getenv("RENEWABLE_FORECAST_REGION", "RTO")
+RENEWABLE_BLEND_PJM_WEIGHT_D1: float = float(os.getenv("RENEWABLE_BLEND_PJM_WEIGHT_D1", "0.50"))
+RENEWABLE_BLEND_PJM_WEIGHT_D7: float = float(os.getenv("RENEWABLE_BLEND_PJM_WEIGHT_D7", "0.75"))
+
 # Variance stabilizing transformation
 VST: str = "asinh"
 
@@ -128,7 +156,7 @@ class ScenarioConfig:
 
     # Analog selection
     n_analogs: int = DEFAULT_N_ANALOGS
-    weight_method: str = "inverse_distance"
+    weight_method: str = "softmax"
 
     # Feature group weights (None → use FEATURE_GROUP_WEIGHTS)
     feature_group_weights: dict[str, float] | None = None
@@ -138,6 +166,8 @@ class ScenarioConfig:
     same_dow_group: bool = FILTER_SAME_DOW_GROUP
     apply_calendar_filter: bool = True
     apply_regime_filter: bool = True
+    apply_outage_regime_filter: bool = FILTER_OUTAGE_REGIME
+    outage_tolerance_std: float = FILTER_OUTAGE_TOLERANCE_STD
     min_pool_size: int = FILTER_MIN_POOL_SIZE
 
     # Adaptive filtering for extreme regimes
@@ -159,8 +189,30 @@ class ScenarioConfig:
     # Database / target
     schema: str = SCHEMA
     hub: str = HUB
+    renewable_forecast_mode: str = RENEWABLE_FORECAST_MODE
+    renewable_forecast_region: str = RENEWABLE_FORECAST_REGION
+    renewable_blend_pjm_weight_d1: float = RENEWABLE_BLEND_PJM_WEIGHT_D1
+    renewable_blend_pjm_weight_d7: float = RENEWABLE_BLEND_PJM_WEIGHT_D7
 
     # ── helpers ──────────────────────────────────────────────────
+
+    def resolved_renewable_mode(self) -> str:
+        """Return renewable forecast mode constrained to supported values."""
+        mode = (self.renewable_forecast_mode or "blend").strip().lower()
+        if mode in {"pjm", "meteologica", "blend"}:
+            return mode
+        return "blend"
+
+    def renewable_blend_weight(self, offset: int = 1) -> float:
+        """Return PJM blend weight for D+offset (linear from D+1 to D+7)."""
+        w1 = min(1.0, max(0.0, float(self.renewable_blend_pjm_weight_d1)))
+        w7 = min(1.0, max(0.0, float(self.renewable_blend_pjm_weight_d7)))
+        if offset <= 1:
+            return w1
+        if offset >= 7:
+            return w7
+        frac = (offset - 1) / 6.0
+        return w1 + (w7 - w1) * frac
 
     def resolved_weights(self) -> dict[str, float]:
         """Return feature weights, falling back to module defaults."""
@@ -180,6 +232,10 @@ class ScenarioConfig:
             "min_pool_size": self.min_pool_size,
             "schema": self.schema,
             "hub": self.hub,
+            "renewable_forecast_mode": self.resolved_renewable_mode(),
+            "renewable_forecast_region": self.renewable_forecast_region,
+            "renewable_blend_pjm_weight_d1": self.renewable_blend_pjm_weight_d1,
+            "renewable_blend_pjm_weight_d7": self.renewable_blend_pjm_weight_d7,
         }
         for k, v in self.resolved_weights().items():
             d[f"w_{k}"] = v

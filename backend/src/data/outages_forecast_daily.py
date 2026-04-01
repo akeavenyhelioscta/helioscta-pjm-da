@@ -21,7 +21,7 @@ def pull(
 
     If region is None, pulls all regions.
     """
-    sql_file = SQL_DIR / "outages_forecast_daily.sql"
+    sql_file = SQL_DIR / "pjm_outages_forecast_daily.sql"
     overrides: dict[str, str | int | bool | None] = {
         "schema": schema,
         "region": region or "",
@@ -38,7 +38,7 @@ def pull(
     df["forecast_date"] = pd.to_datetime(df["forecast_date"]).dt.date
     df = validate_source_frame(
         df=df,
-        source_name="outages_forecast_daily",
+        source_name="pjm_outages_forecast_daily",
         required_columns=[
             "forecast_execution_date",
             "forecast_date",

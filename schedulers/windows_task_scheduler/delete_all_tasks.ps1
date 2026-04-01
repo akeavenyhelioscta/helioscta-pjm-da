@@ -1,8 +1,8 @@
 # Unregister All Scheduled Tasks
-# Removes all scheduled tasks under the \helioscta-backend task path.
+# Removes all scheduled tasks under the \PJM-DA task path.
 # Run as Administrator: powershell -ExecutionPolicy Bypass -File delete_all_tasks.ps1
 
-$taskPath = "\helioscta-backend\"
+$taskPath = "\PJM-DA\"
 $allTasks = Get-ScheduledTask -TaskPath "$taskPath*" -ErrorAction SilentlyContinue
 
 if ($null -eq $allTasks -or $allTasks.Count -eq 0) {
@@ -63,7 +63,7 @@ function Remove-EmptyTaskFolders($folder) {
     foreach ($subfolder in $folder.GetFolders(0)) {
         Remove-EmptyTaskFolders $subfolder
     }
-    if ($folder.Path -like "\helioscta-backend*" -and $folder.GetTasks(0).Count -eq 0 -and $folder.GetFolders(0).Count -eq 0) {
+    if ($folder.Path -like "\PJM-DA*" -and $folder.GetTasks(0).Count -eq 0 -and $folder.GetFolders(0).Count -eq 0) {
         try {
             $parentPath = $folder.Path.Substring(0, $folder.Path.LastIndexOf("\"))
             if ($parentPath -eq "") { $parentPath = "\" }
@@ -78,12 +78,12 @@ function Remove-EmptyTaskFolders($folder) {
 }
 
 try {
-    $heliosFolder = $scheduleService.GetFolder("\helioscta-backend")
+    $heliosFolder = $scheduleService.GetFolder("\PJM-DA")
     Remove-EmptyTaskFolders $heliosFolder
-    $heliosFolder = $scheduleService.GetFolder("\helioscta-backend")
+    $heliosFolder = $scheduleService.GetFolder("\PJM-DA")
     if ($heliosFolder.GetTasks(0).Count -eq 0 -and $heliosFolder.GetFolders(0).Count -eq 0) {
-        $rootFolder.DeleteFolder("helioscta-backend", 0)
-        Write-Host "  Removed empty folder: \helioscta-backend" -ForegroundColor Green
+        $rootFolder.DeleteFolder("PJM-DA", 0)
+        Write-Host "  Removed empty folder: \PJM-DA" -ForegroundColor Green
     }
 }
 catch {

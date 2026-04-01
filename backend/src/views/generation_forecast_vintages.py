@@ -324,12 +324,19 @@ if __name__ == "__main__":
     )
 
     for ftype, mod in [("solar", solar_forecast_vintages), ("wind", wind_forecast_vintages)]:
-        df = pull_with_cache(
-            source_name=f"{ftype}_vintage_combined",
-            pull_fn=mod.pull_combined_vintages,
+        df_pjm = pull_with_cache(
+            source_name=f"pjm_{ftype}_forecast_vintages",
+            pull_fn=mod.pull_pjm_vintages,
             pull_kwargs={},
             **CACHE,
         )
+        df_meteo = pull_with_cache(
+            source_name=f"meteologica_{ftype}_forecast_vintages",
+            pull_fn=mod.pull_meteologica_vintages,
+            pull_kwargs={},
+            **CACHE,
+        )
+        df = pd.concat([df_pjm, df_meteo], ignore_index=True)
         vm = build_view_model(df, forecast_type=ftype)
         print(f"\n{'='*60}")
         print(f"  {ftype.upper()} FORECAST VINTAGES")

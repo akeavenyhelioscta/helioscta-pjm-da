@@ -15,7 +15,7 @@ def pull(
     sql_overrides: dict[str, str | int | bool | None] | None = None,
 ) -> pd.DataFrame:
     """Pull next-day gas prices from ICE (daily VWAP snapshot)."""
-    sql_file = SQL_DIR / "gas_prices.sql"
+    sql_file = SQL_DIR / "ice_gas_prices.sql"
     query = render_sql_template(sql_file, sql_overrides)
 
     logger.info("Pulling gas prices from ice_python_cleaned")
@@ -24,7 +24,7 @@ def pull(
     df["date"] = pd.to_datetime(df["date"]).dt.date
     df = validate_source_frame(
         df=df,
-        source_name="gas_prices",
+        source_name="ice_gas_prices",
         required_columns=["date", "gas_m3_price", "gas_hh_price"],
         unique_key_columns=["date"],
         drop_duplicate_keys=True,

@@ -34,15 +34,15 @@ def profile(
     """
     sources = SOURCE_REGISTRY
     if only:
-        sources = [(n, fn, kw) for n, fn, kw in sources if n in only]
-        unknown = set(only) - {n for n, _, _ in sources}
+        sources = [(n, fn, kw, uk, lb) for n, fn, kw, uk, lb in sources if n in only]
+        unknown = set(only) - {n for n, _, _, _, _ in sources}
         if unknown:
             logger.warning(f"Unknown sources (skipped): {unknown}")
 
     results: list[dict] = []
     logger.info(f"Profiling {len(sources)} sources sequentially (no cache)")
 
-    for name, fn, kwargs in sources:
+    for name, fn, kwargs, _uk, _lb in sources:
         logger.info(f"  pulling {name} ...")
         t0 = time.perf_counter()
         try:
@@ -97,8 +97,14 @@ def main():
     args = _parse_args()
 
     if args.list_sources:
-        for name, _, kwargs in SOURCE_REGISTRY:
-            print(f"  {name:45s} {kwargs or ''}")
+        print(f"\n  {'SOURCE':<45s} {'REFRESH':>12s}  {'UNIQUE KEY':<55s}  PULL KWARGS")
+        print(f"  {'-' * 45} {'-' * 12}  {'-' * 55}  {'-' * 30}")
+        for name, _, kwargs, uk, lb in SOURCE_REGISTRY:
+            lb_str = f"lookback={lb}d" if lb else "full"
+            uk_str = ", ".join(uk) if uk else "-"
+            kw_str = str(kwargs) if kwargs else "-"
+            print(f"  {name:<45s} {lb_str:>12s}  {uk_str:<55s}  {kw_str}")
+        print(f"\n  {len(SOURCE_REGISTRY)} sources registered\n")
         return
 
     profile(only=args.only, top=args.top)

@@ -138,7 +138,7 @@ if __name__ == "__main__":
     )
 
     df = pull_with_cache(
-        source_name="fuel_mix_hourly",
+        source_name="pjm_fuel_mix_hourly",
         pull_fn=fuel_mix_hourly.pull,
         pull_kwargs={},
         **CACHE,

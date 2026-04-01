@@ -26,50 +26,59 @@ from src.data import (
     dates,
     fuel_mix_hourly,
     gas_prices,
+    ice_power_intraday,
     lmps_hourly,
     load_rt_metered_hourly,
     meteologica_da_price_forecast,
-    meteologica_euro_ens_forecast,
+    meteologica_generation_forecast_hourly,
     outages_actual_daily,
     outages_forecast_daily,
-    solar_forecast_hourly,
+    pjm_load_forecast_hourly,
+    pjm_solar_forecast_hourly,
+    pjm_wind_forecast_hourly,
     tie_flows_hourly,
+    transmission_outages,
     weather_hourly,
-    wind_forecast_hourly,
 )
-from src.data.load_forecast_vintages import pull_combined_vintages as _pull_combined_vintages
-from src.data.solar_forecast_vintages import pull_combined_vintages as _pull_solar_combined
-from src.data.wind_forecast_vintages import pull_combined_vintages as _pull_wind_combined
+from src.data import load_forecast_vintages, solar_forecast_vintages, wind_forecast_vintages
+from src.data.load_forecast_vintages import pull_combined_vintages as _pull_load_vintages
 
 logger = logging.getLogger(__name__)
 
 # ── Source registry ──────────────────────────────────────────────────
-# Each entry: (source_name, pull_fn, pull_kwargs)
-# source_name must match the key used by feature builder / report fragments
-# so the same cached file is reused downstream.
+# Each entry: (source_name, pull_fn, pull_kwargs, unique_key)
+# source_name is the cache key — one parquet file per source_name.
 
-REGIONS = ["RTO", "WEST", "MIDATL", "SOUTH"]
+# Each entry: (source_name, pull_fn, pull_kwargs, unique_key, refresh_lookback_days)
+# refresh_lookback_days: on refresh of an existing cache, only pull
+# the last N days from the DB instead of full history. None = always full pull
+# (use None for sources whose pull functions don't support sql_overrides start_date).
 
-SOURCE_REGISTRY: list[tuple[str, callable, dict]] = [
-    ("dates_daily", dates.pull_daily, {"schema": configs.SCHEMA}),
-    ("forecast_vintage_meteologica", _pull_combined_vintages, {"source": "meteologica"}),
-    ("forecast_vintage_pjm", _pull_combined_vintages, {"source": "pjm"}),
-    ("fuel_mix_hourly", fuel_mix_hourly.pull, {}),
-    ("gas_prices", gas_prices.pull, {}),
-    ("lmps_hourly_da", lmps_hourly.pull, {"schema": configs.SCHEMA, "market": "da"}),
-    ("lmps_hourly_rt", lmps_hourly.pull, {"schema": configs.SCHEMA, "market": "rt"}),
-    ("load_rt_metered_hourly", load_rt_metered_hourly.pull, {}),
-    ("meteologica_da_price_forecast", meteologica_da_price_forecast.pull, {}),
-    ("meteologica_da_price_vintage", meteologica_da_price_forecast.pull_da_cutoff_vintages, {}),
-    ("meteologica_euro_ens", meteologica_euro_ens_forecast.pull_strip_all_regions, {}),
-    ("outages_actual_daily", outages_actual_daily.pull, {"schema": configs.SCHEMA}),
-    ("outages_forecast_daily", outages_forecast_daily.pull, {"lookback_days": 14}),
-    ("solar_forecast_hourly", solar_forecast_hourly.pull, {}),
-    ("solar_vintage_combined", _pull_solar_combined, {}),
-    ("tie_flows_hourly", tie_flows_hourly.pull, {}),
-    ("weather_hourly", weather_hourly.pull, {}),
-    ("wind_forecast_hourly", wind_forecast_hourly.pull, {}),
-    ("wind_vintage_combined", _pull_wind_combined, {}),
+SOURCE_REGISTRY: list[tuple[str, callable, dict, list[str], int | None]] = [
+    ("ice_gas_prices",                          gas_prices.pull,                                     {},                                             ["date"],                                                                       7),
+    ("ice_power_intraday",                      ice_power_intraday.pull_intraday,                    {"lookback_days": 3},                           ["trade_date", "symbol", "snapshot_at"],                                         None),
+    ("ice_power_settles",                       ice_power_intraday.pull_settles,                     {"lookback_days": 30},                          ["trade_date", "symbol"],                                                       None),
+    ("meteologica_da_price_forecast",           meteologica_da_price_forecast.pull,                  {},                                             ["forecast_date", "hour_ending", "hub"],                                        None),
+    ("meteologica_da_price_vintages",           meteologica_da_price_forecast.pull_da_cutoff_vintages, {},                                           ["forecast_date", "hour_ending", "hub", "vintage_label"],                       None),
+    ("meteologica_load_forecast_vintages",      _pull_load_vintages,                                {"source": "meteologica"},                      ["forecast_date", "hour_ending", "source", "region", "vintage_label"],           None),
+    ("meteologica_solar_forecast_vintages",     solar_forecast_vintages.pull_meteologica_vintages,   {},                                             ["source", "region", "forecast_date", "hour_ending", "vintage_label"],           None),
+    ("meteologica_wind_forecast_vintages",      wind_forecast_vintages.pull_meteologica_vintages,    {},                                             ["source", "region", "forecast_date", "hour_ending", "vintage_label"],           None),
+    ("pjm_dates_daily",                         dates.pull_daily,                                   {"schema": configs.SCHEMA},                     ["date"],                                                                       7),
+    ("pjm_fuel_mix_hourly",                     fuel_mix_hourly.pull,                                {},                                             ["date", "hour_ending"],                                                        7),
+    ("pjm_lmps_hourly_da",                      lmps_hourly.pull,                                   {"schema": configs.SCHEMA, "market": "da"},     ["date", "hour_ending", "hub"],                                                 7),
+    ("pjm_lmps_hourly_rt",                      lmps_hourly.pull,                                   {"schema": configs.SCHEMA, "market": "rt"},     ["date", "hour_ending", "hub"],                                                 7),
+    ("pjm_load_forecast_latest",                pjm_load_forecast_hourly.pull,                      {"region": configs.LOAD_REGION},                ["forecast_date", "hour_ending"],                                               None),
+    ("pjm_load_forecast_vintages",              _pull_load_vintages,                                {"source": "pjm"},                              ["forecast_date", "hour_ending", "source", "region", "vintage_label"],           None),
+    ("pjm_load_rt_metered_hourly",              load_rt_metered_hourly.pull,                         {},                                             ["date", "hour_ending", "region"],                                              7),
+    ("pjm_outages_actual_daily",                outages_actual_daily.pull,                           {"schema": configs.SCHEMA},                     ["date", "region"],                                                             7),
+    ("pjm_outages_forecast_daily",              outages_forecast_daily.pull,                         {"lookback_days": 14},                          ["forecast_execution_date", "forecast_date", "region", "forecast_rank"],         None),
+    ("pjm_solar_forecast_rto",                  pjm_solar_forecast_hourly.pull,                     {"timezone": "America/New_York"},                ["forecast_date", "hour_ending"],                                               None),
+    ("pjm_solar_forecast_vintages",             solar_forecast_vintages.pull_pjm_vintages,          {},                                             ["source", "region", "forecast_date", "hour_ending", "vintage_label"],           None),
+    ("pjm_tie_flows_hourly",                    tie_flows_hourly.pull,                               {},                                             ["datetime_beginning_ept"],                                                     7),
+    ("pjm_transmission_outages",                transmission_outages.pull,                           {},                                             ["outage_id"],                                                                  None),
+    ("pjm_wind_forecast_rto",                   pjm_wind_forecast_hourly.pull,                      {"timezone": "America/New_York"},                ["forecast_date", "hour_ending"],                                               None),
+    ("pjm_wind_forecast_vintages",              wind_forecast_vintages.pull_pjm_vintages,           {},                                             ["source", "region", "forecast_date", "hour_ending", "vintage_label"],           None),
+    ("wsi_weather_hourly",                      weather_hourly.pull,                                 {},                                             ["date", "hour_ending", "station_name"],                                        7),
 ]
 
 
@@ -77,6 +86,8 @@ def _pull_one(
     source_name: str,
     pull_fn: callable,
     pull_kwargs: dict,
+    unique_key: list[str],
+    refresh_lookback_days: int | None,
     cache_dir: Path,
     ttl_hours: float,
 ) -> tuple[str, int]:
@@ -89,6 +100,8 @@ def _pull_one(
         cache_enabled=True,
         ttl_hours=ttl_hours,
         force_refresh=True,
+        unique_key=unique_key,
+        refresh_lookback_days=refresh_lookback_days,
     )
     return source_name, len(df)
 
@@ -108,19 +121,19 @@ def refresh(
 
     sources = SOURCE_REGISTRY
     if only:
-        sources = [(n, fn, kw) for n, fn, kw in sources if n in only]
-        unknown = set(only) - {n for n, _, _ in sources}
+        sources = [(n, fn, kw, uk, lb) for n, fn, kw, uk, lb in sources if n in only]
+        unknown = set(only) - {n for n, _, _, _, _ in sources}
         if unknown:
             logger.warning(f"Unknown sources (skipped): {unknown}")
-            logger.info(f"Available: {[n for n, _, _ in SOURCE_REGISTRY]}")
+            logger.info(f"Available: {[n for n, _, _, _, _ in SOURCE_REGISTRY]}")
 
     logger.info(f"Refreshing {len(sources)} data sources → {cache_dir} (workers={max_workers})")
     t0 = time.time()
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
-            pool.submit(_pull_one, name, fn, kw, cache_dir, ttl_hours): name
-            for name, fn, kw in sources
+            pool.submit(_pull_one, name, fn, kw, uk, lb, cache_dir, ttl_hours): name
+            for name, fn, kw, uk, lb in sources
         }
         for future in as_completed(futures):
             name = futures[future]
@@ -179,8 +192,14 @@ def main():
     args = _parse_args()
 
     if args.list_sources:
-        for name, _, kwargs in SOURCE_REGISTRY:
-            print(f"  {name:45s} {kwargs or ''}")
+        print(f"\n  {'SOURCE':<45s} {'REFRESH':>12s}  {'UNIQUE KEY':<55s}  PULL KWARGS")
+        print(f"  {'-' * 45} {'-' * 12}  {'-' * 55}  {'-' * 30}")
+        for name, _, kwargs, uk, lb in SOURCE_REGISTRY:
+            lb_str = f"lookback={lb}d" if lb else "full"
+            uk_str = ", ".join(uk) if uk else "-"
+            kw_str = str(kwargs) if kwargs else "-"
+            print(f"  {name:<45s} {lb_str:>12s}  {uk_str:<55s}  {kw_str}")
+        print(f"\n  {len(SOURCE_REGISTRY)} sources registered\n")
         return
 
     if args.purge:

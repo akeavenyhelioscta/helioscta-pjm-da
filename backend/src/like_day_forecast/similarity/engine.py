@@ -29,6 +29,10 @@ FEATURE_GROUPS = {
                      "lmp_7d_rolling_std"],
         "default_metric": "euclidean",
     },
+    "lmp_ramps": {
+        "columns": ["lmp_evening_ramp", "lmp_morning_ramp"],
+        "default_metric": "euclidean",
+    },
     "load_level": {
         "columns": ["load_daily_avg", "load_daily_peak", "load_daily_valley",
                      "load_7d_rolling_mean"],
@@ -38,16 +42,48 @@ FEATURE_GROUPS = {
         "columns": ["load_peak_ratio", "load_ramp_max"],
         "default_metric": "euclidean",
     },
-    "gas_price": {
-        "columns": ["gas_m3_price", "gas_hh_price", "gas_m3_hh_spread"],
+    "load_west_level": {
+        "columns": ["load_west_daily_avg", "load_west_daily_peak",
+                     "load_west_7d_rolling_mean"],
         "default_metric": "euclidean",
     },
-    "gas_momentum": {
-        "columns": ["gas_m3_7d_change", "gas_m3_30d_mean"],
+    "load_ramps": {
+        "columns": ["load_morning_ramp", "load_evening_ramp",
+                     "load_west_morning_ramp", "load_west_evening_ramp",
+                     "load_midatl_morning_ramp", "load_midatl_evening_ramp",
+                     "load_south_morning_ramp", "load_south_evening_ramp"],
+        "default_metric": "euclidean",
+    },
+    "load_midatl_level": {
+        "columns": ["load_midatl_daily_avg", "load_midatl_daily_peak",
+                     "load_midatl_7d_rolling_mean"],
+        "default_metric": "euclidean",
+    },
+    "load_south_level": {
+        "columns": ["load_south_daily_avg", "load_south_daily_peak",
+                     "load_south_7d_rolling_mean"],
+        "default_metric": "euclidean",
+    },
+    "gas_hourly_level": {
+        "columns": ["gas_m3_daily_avg", "gas_m3_daily_max",
+                     "gas_m3_onpeak_avg", "gas_m3_offpeak_avg",
+                     "gas_tco_daily_avg", "gas_tz6_daily_avg",
+                     "gas_dom_south_daily_avg"],
+        "default_metric": "euclidean",
+    },
+    "gas_hourly_shape": {
+        "columns": ["gas_m3_intraday_range", "gas_m3_morning_ramp",
+                     "gas_tco_intraday_range", "gas_tz6_intraday_range",
+                     "gas_dom_south_intraday_range"],
+        "default_metric": "euclidean",
+    },
+    "gas_basis_spread": {
+        "columns": ["gas_basis_m3_dom_south", "gas_basis_tz6_m3",
+                     "gas_basis_tco_m3", "gas_basis_m3_chicago"],
         "default_metric": "euclidean",
     },
     "calendar_dow": {
-        "columns": ["dow_sin", "dow_cos"],
+        "columns": ["is_weekend"],
         "default_metric": "euclidean",
     },
     "calendar_season": {
@@ -102,6 +138,10 @@ FEATURE_GROUPS = {
                      "tgt_outage_change_vs_ref"],
         "default_metric": "euclidean",
     },
+    "target_outage_west_level": {
+        "columns": ["tgt_outage_west_total_mw", "tgt_outage_west_forced_mw"],
+        "default_metric": "euclidean",
+    },
     "target_weather_level": {
         "columns": ["tgt_temp_daily_avg", "tgt_temp_daily_max", "tgt_temp_daily_min",
                      "tgt_feels_like_daily_avg", "tgt_temp_change_vs_ref"],
@@ -109,6 +149,59 @@ FEATURE_GROUPS = {
     },
     "target_weather_hdd_cdd": {
         "columns": ["tgt_hdd", "tgt_cdd"],
+        "default_metric": "euclidean",
+    },
+    "target_load_level": {
+        "columns": ["tgt_load_daily_avg", "tgt_load_daily_peak",
+                     "tgt_load_change_vs_ref"],
+        "default_metric": "euclidean",
+    },
+    "target_load_west_level": {
+        "columns": ["tgt_load_west_daily_avg", "tgt_load_west_daily_peak"],
+        "default_metric": "euclidean",
+    },
+    "target_load_ramps": {
+        "columns": ["tgt_load_morning_ramp", "tgt_load_evening_ramp",
+                     "tgt_load_west_morning_ramp", "tgt_load_west_evening_ramp",
+                     "tgt_load_midatl_morning_ramp", "tgt_load_midatl_evening_ramp",
+                     "tgt_load_south_morning_ramp", "tgt_load_south_evening_ramp"],
+        "default_metric": "euclidean",
+    },
+    "target_load_midatl_level": {
+        "columns": ["tgt_load_midatl_daily_avg", "tgt_load_midatl_daily_peak"],
+        "default_metric": "euclidean",
+    },
+    "target_load_south_level": {
+        "columns": ["tgt_load_south_daily_avg", "tgt_load_south_daily_peak"],
+        "default_metric": "euclidean",
+    },
+    "target_meteo_load_level": {
+        "columns": ["tgt_meteo_load_daily_avg", "tgt_meteo_load_daily_peak",
+                     "tgt_meteo_load_west_daily_avg"],
+        "default_metric": "euclidean",
+    },
+    "nuclear_level": {
+        "columns": ["nuclear_daily_avg", "nuclear_7d_rolling_mean",
+                     "nuclear_share_of_total"],
+        "default_metric": "euclidean",
+    },
+    "congestion_level": {
+        "columns": ["congestion_daily_avg", "congestion_onpeak_avg",
+                     "congestion_7d_rolling_std", "congestion_daily_max"],
+        "default_metric": "euclidean",
+    },
+    "fuel_mix_shares": {
+        "columns": ["fuel_share_gas", "fuel_share_coal",
+                     "fuel_share_nuclear", "fuel_share_renewable"],
+        "default_metric": "euclidean",
+    },
+    "net_load_level": {
+        "columns": ["net_load_daily_avg", "net_load_daily_peak",
+                     "net_load_daily_valley", "net_load_7d_rolling_mean"],
+        "default_metric": "euclidean",
+    },
+    "net_load_ramps": {
+        "columns": ["net_load_evening_ramp", "net_load_morning_ramp"],
         "default_metric": "euclidean",
     },
 }
@@ -208,6 +301,8 @@ def find_analogs(
     season_window_days: int = configs.FILTER_SEASON_WINDOW_DAYS,
     same_dow_group: bool = configs.FILTER_SAME_DOW_GROUP,
     weight_method: str = "inverse_distance",
+    apply_outage_regime_filter: bool = configs.FILTER_OUTAGE_REGIME,
+    outage_tolerance_std: float = configs.FILTER_OUTAGE_TOLERANCE_STD,
     adaptive_filter_enabled: bool = configs.ADAPTIVE_FILTER_ENABLED,
     adaptive_extreme_threshold_std: float = configs.ADAPTIVE_EXTREME_THRESHOLD_STD,
     adaptive_season_window_days: int = configs.ADAPTIVE_SEASON_WINDOW_DAYS,
@@ -287,6 +382,12 @@ def find_analogs(
             lmp_tolerance_std=lmp_tol, gas_tolerance_std=gas_tol,
         )
 
+    if apply_outage_regime_filter:
+        pool = filtering.outage_regime_filter(
+            pool, target_date, df_full=df_features,
+            tolerance_std=outage_tolerance_std,
+        )
+
     # Ensure minimum pool size
     pool = filtering.ensure_minimum_pool(pool, df_features, target_date)
 
@@ -354,6 +455,20 @@ def find_analogs(
     distances = np.array(distances)
     pool_dates = np.array(pool_dates)
 
+    # --- 4b. Recency penalty: older analogs get a distance surcharge ---
+    # Decay factor: distance *= (1 + age_days / half_life_days)
+    # At half_life (730 days), distance is 2x; at 1 year, distance is ~1.5x.
+    # This allows year-ago analogs with similar outage/seasonal conditions
+    # to remain competitive against recent but fundamentally different days.
+    RECENCY_HALF_LIFE_DAYS = 730
+    if len(pool_dates) > 0:
+        target_ordinal = target_date.toordinal()
+        ages_days = np.array([
+            target_ordinal - d.toordinal() for d in pool_dates
+        ], dtype=float)
+        recency_multiplier = 1.0 + ages_days / RECENCY_HALF_LIFE_DAYS
+        distances = distances * recency_multiplier
+
     # --- 5. Rank and select top-N ---
     n_select = min(n_analogs, len(distances))
     top_indices = np.argsort(distances)[:n_select]
@@ -362,7 +477,7 @@ def find_analogs(
     result_distances = distances[top_indices]
 
     # Compute analog weights
-    softmax_temp = adaptive_softmax_temperature if is_extreme else 1.0
+    softmax_temp = adaptive_softmax_temperature if is_extreme else 0.3
     result_weights = compute_analog_weights(
         result_distances, method=weight_method, temperature=softmax_temp,
     )

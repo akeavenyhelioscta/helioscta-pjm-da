@@ -151,7 +151,7 @@ def validate_load_rt_metered_hourly(df: pd.DataFrame) -> Any:
         ExpectColumnValuesToNotBeNull(column="rt_load_mw", mostly=0.95),
     ]
     logger.info("Running GX suite: load_rt_metered_hourly")
-    return _validate_df(df, "load_rt_metered_hourly", expectations)
+    return _validate_df(df, "pjm_load_rt_metered_hourly", expectations)
 
 
 def validate_gas_prices(df: pd.DataFrame) -> Any:
@@ -173,7 +173,7 @@ def validate_gas_prices(df: pd.DataFrame) -> Any:
         ExpectColumnValuesToNotBeNull(column="gas_hh_price", mostly=0.90),
     ]
     logger.info("Running GX suite: gas_prices")
-    return _validate_df(df, "gas_prices", expectations)
+    return _validate_df(df, "ice_gas_prices", expectations)
 
 
 def validate_weather_hourly(df: pd.DataFrame) -> Any:
@@ -193,7 +193,7 @@ def validate_weather_hourly(df: pd.DataFrame) -> Any:
         ExpectColumnValuesToNotBeNull(column="temp", mostly=0.90),
     ]
     logger.info("Running GX suite: weather_hourly")
-    return _validate_df(df, "weather_hourly", expectations)
+    return _validate_df(df, "wsi_weather_hourly", expectations)
 
 
 def validate_dates_daily(df: pd.DataFrame) -> Any:
@@ -212,7 +212,7 @@ def validate_dates_daily(df: pd.DataFrame) -> Any:
         ),
     ]
     logger.info("Running GX suite: dates_daily")
-    return _validate_df(df, "dates_daily", expectations)
+    return _validate_df(df, "pjm_dates_daily", expectations)
 
 
 # ─── Feature matrix suite ────────────────────────────────────────────────

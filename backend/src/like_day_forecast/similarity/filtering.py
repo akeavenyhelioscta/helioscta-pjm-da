@@ -180,6 +180,69 @@ def regime_filter(
     return filtered
 
 
+def outage_regime_filter(
+    df: pd.DataFrame,
+    target_date: date,
+    outage_col: str = "outage_total_mw",
+    tolerance_std: float = configs.FILTER_OUTAGE_TOLERANCE_STD,
+    df_full: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Filter out dates with fundamentally different outage levels.
+
+    During spring/fall maintenance seasons, outage levels shift by tens of GW.
+    A 35 GW outage day is not a good analog for a 55 GW outage day, even if
+    they share similar load and gas profiles. This filter ensures the candidate
+    pool matches the target's outage regime.
+
+    Uses the same z-score approach as the LMP/gas regime filter: candidates
+    whose outage z-score differs from the target's by more than tolerance_std
+    are excluded.
+
+    Args:
+        df: Daily feature DataFrame (candidate pool).
+        target_date: The target forecast date.
+        outage_col: Column for total outage MW.
+        tolerance_std: Number of standard deviations tolerance.
+        df_full: Full unfiltered feature matrix (fallback for target lookup).
+
+    Returns:
+        Filtered DataFrame.
+    """
+    # Look up target features
+    target_row = df[df["date"] == target_date]
+    if len(target_row) == 0 and df_full is not None:
+        target_row = df_full[df_full["date"] == target_date]
+    if len(target_row) == 0:
+        logger.warning(f"Target date {target_date} not found — skipping outage regime filter")
+        return df[df["date"] != target_date]
+
+    filtered = df[(df["date"] != target_date) & (df["date"] < target_date)].copy()
+
+    if outage_col not in filtered.columns or outage_col not in target_row.columns:
+        logger.info("Outage column not found — skipping outage regime filter")
+        return filtered
+
+    target_outage = target_row[outage_col].iloc[0]
+    if np.isnan(target_outage):
+        logger.info("Target outage is NaN — skipping outage regime filter")
+        return filtered
+
+    outage_mean = filtered[outage_col].mean()
+    outage_std = filtered[outage_col].std()
+    if outage_std == 0:
+        return filtered
+
+    z_target = (target_outage - outage_mean) / outage_std
+    z_candidates = (filtered[outage_col] - outage_mean) / outage_std
+    z_diff = np.abs(z_candidates - z_target)
+    before = len(filtered)
+    filtered = filtered[z_diff <= tolerance_std]
+
+    logger.info(f"Outage regime filter: {before:,} -> {len(filtered):,} candidates "
+                f"(target={target_outage:,.0f} MW, z={z_target:.2f}, tol={tolerance_std})")
+    return filtered
+
+
 def ensure_minimum_pool(
     df_filtered: pd.DataFrame,
     df_full: pd.DataFrame,

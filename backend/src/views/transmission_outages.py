@@ -277,7 +277,7 @@ if __name__ == "__main__":
     )
 
     df = pull_with_cache(
-        source_name="transmission_outages_active",
+        source_name="pjm_transmission_outages",
         pull_fn=tx_data.pull,
         pull_kwargs={},
         **CACHE,

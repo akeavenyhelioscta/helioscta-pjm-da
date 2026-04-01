@@ -16,7 +16,7 @@ def pull_daily(
     sql_overrides: dict[str, str | int | bool | None] | None = None,
 ) -> pd.DataFrame:
     """Pull daily calendar features."""
-    sql_file = SQL_DIR / "dates_daily.sql"
+    sql_file = SQL_DIR / "pjm_dates_daily.sql"
     overrides: dict[str, str | int | bool | None] = {"schema": schema}
     if sql_overrides:
         overrides.update(sql_overrides)
@@ -27,7 +27,7 @@ def pull_daily(
     df["date"] = pd.to_datetime(df["date"]).dt.date
     df = validate_source_frame(
         df=df,
-        source_name="dates_daily",
+        source_name="pjm_dates_daily",
         required_columns=[
             "date",
             "day_of_week_number",

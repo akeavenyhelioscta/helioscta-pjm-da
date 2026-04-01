@@ -6,8 +6,8 @@ $action = New-ScheduledTaskAction `
     -Argument "/c `"call `"$condaPath`" helioscta-pjm-da && cd /d `"$backendDir`" && python -m src.scripts.refresh_cache --ttl 1`"" `
     -WorkingDirectory $backendDir
 
-# Run every 2 hours, 24/7
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Hours 2)
+# Run every 30 minutes, 24/7
+$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes 30)
 
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `

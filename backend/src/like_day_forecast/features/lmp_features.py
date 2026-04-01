@@ -40,10 +40,10 @@ def build(
     pivot.columns = [f"lmp_profile_h{int(c)}" for c in pivot.columns]
     pivot = pivot.sort_index()
 
-    # Apply asinh transform to profile columns (compress spikes for distance calc)
-    for col in pivot.columns:
-        pivot[col] = preprocessing.asinh_transform(pivot[col])
-
+    # NOTE: No asinh on hourly profile columns. The z-score normalization in the
+    # engine handles scale. asinh over-compresses evening spikes ($93 → 5.2 vs
+    # $70 → 4.9), making the model unable to distinguish steep-peak from
+    # moderate-peak days. Raw $/MWh preserves the signal.
     result = pivot.copy()
 
     # --- Daily summary statistics ---
@@ -79,10 +79,25 @@ def build(
     # Day-over-day change
     daily_raw["lmp_daily_change"] = flat.diff()
 
-    # Apply asinh to level features (not ratios/shares)
-    for col in ["lmp_daily_flat", "lmp_onpeak_avg", "lmp_offpeak_avg",
-                 "lmp_7d_rolling_mean", "lmp_30d_rolling_mean",
-                 "lmp_daily_max", "lmp_daily_min", "lmp_daily_change"]:
+    # Evening ramp: HE20 - HE15 (captures peak pricing intensity)
+    for d, grp in df.groupby("date"):
+        he15 = grp.loc[grp["hour_ending"] == 15, "lmp_total"]
+        he20 = grp.loc[grp["hour_ending"] == 20, "lmp_total"]
+        if len(he15) > 0 and len(he20) > 0:
+            daily_raw.at[d, "lmp_evening_ramp"] = float(he20.iloc[0]) - float(he15.iloc[0])
+
+    # Morning ramp: HE8 - HE5
+    for d, grp in df.groupby("date"):
+        he5 = grp.loc[grp["hour_ending"] == 5, "lmp_total"]
+        he8 = grp.loc[grp["hour_ending"] == 8, "lmp_total"]
+        if len(he5) > 0 and len(he8) > 0:
+            daily_raw.at[d, "lmp_morning_ramp"] = float(he8.iloc[0]) - float(he5.iloc[0])
+
+    # asinh only on rolling stats (smooths outlier influence on trends).
+    # Level features (flat, onpeak, max) stay raw — z-score normalization in
+    # the engine handles scale, and raw values preserve the $93 vs $70 distinction
+    # that asinh compresses away.
+    for col in ["lmp_7d_rolling_mean", "lmp_30d_rolling_mean", "lmp_7d_rolling_std"]:
         if col in daily_raw.columns:
             daily_raw[col] = preprocessing.asinh_transform(daily_raw[col])
 
@@ -93,7 +108,7 @@ def build(
         rt_daily = df_lmp_rt.groupby("date")["lmp_total"].mean().rename("rt_lmp_daily_flat")
         da_daily = df.groupby("date")["lmp_total"].mean()
         dart = (da_daily - rt_daily).rename("dart_spread_daily")
-        result = result.join(preprocessing.asinh_transform(dart))
+        result = result.join(dart)
 
     result = result.reset_index()
 

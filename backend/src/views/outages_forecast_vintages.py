@@ -156,7 +156,7 @@ if __name__ == "__main__":
     )
 
     df = pull_with_cache(
-        source_name="outages_forecast_daily",
+        source_name="pjm_outages_forecast_daily",
         pull_fn=outages_forecast_daily.pull,
         pull_kwargs={"lookback_days": 14},
         **CACHE,

@@ -1,13 +1,14 @@
--- Meteologica load forecast DA cutoff vintages (RTO).
+-- Meteologica load forecast DA cutoff vintages.
+-- Parameterized by {region} (default: all regions). Pass '' for all.
 -- Selects 4 vintages anchored to the DA cutoff execution:
 --   DA Cutoff (0h), DA -12h, DA -24h, DA -48h.
--- For each vintage, picks the highest forecast_rank per (forecast_date, hour_ending)
--- where forecast_date >= today. Does NOT filter elapsed hours.
+-- For each vintage, picks the highest forecast_rank per (region, forecast_date, hour_ending)
+-- where forecast_date >= today.
 with params as (
     select
         case
-            when left('{region}', 1) = chr(123) and right('{region}', 1) = chr(125) then 'RTO'
-            else coalesce(nullif('{region}', ''), 'RTO')
+            when left('{region}', 1) = chr(123) and right('{region}', 1) = chr(125) then null
+            else nullif('{region}', '')
         end::text as region,
         case
             when left('{da_cutoff_time}', 1) = chr(123) and right('{da_cutoff_time}', 1) = chr(125) then '10:00:00'
@@ -27,7 +28,7 @@ da_anchor as (
     select
         max(forecast_execution_datetime) as da_cutoff_execution_datetime
     from meteologica_cleaned.meteologica_pjm_demand_forecast_hourly
-    where region = (select region from params)
+    where ((select region from params) is null or region = (select region from params))
       and forecast_execution_datetime::time < (select da_cutoff_time from params)::time
 ),
 resolved_cutoffs as (
@@ -38,7 +39,7 @@ resolved_cutoffs as (
     from da_targets t
     cross join da_anchor a
     left join meteologica_cleaned.meteologica_pjm_demand_forecast_hourly src
-        on src.region = (select region from params)
+        on ((select region from params) is null or src.region = (select region from params))
        and a.da_cutoff_execution_datetime is not null
        and src.forecast_execution_datetime <= (
            a.da_cutoff_execution_datetime - (t.vintage_offset_hours || ' hours')::interval
@@ -51,17 +52,18 @@ ranked as (
         c.vintage_anchor_execution_datetime,
         d.forecast_date,
         d.hour_ending,
+        d.region,
         d.forecast_load_mw,
         d.forecast_execution_datetime,
         d.forecast_datetime,
         d.forecast_rank,
         row_number() over (
-            partition by c.vintage_label, d.forecast_date, d.hour_ending
+            partition by c.vintage_label, d.region, d.forecast_date, d.hour_ending
             order by d.forecast_rank desc
         ) as rn
     from resolved_cutoffs c
     join meteologica_cleaned.meteologica_pjm_demand_forecast_hourly d
-        on d.region = (select region from params)
+        on ((select region from params) is null or d.region = (select region from params))
        and c.vintage_anchor_execution_datetime is not null
        and d.forecast_execution_datetime <= c.vintage_anchor_execution_datetime
        and d.forecast_date >= current_date
@@ -73,8 +75,9 @@ select
     forecast_rank,
     forecast_load_mw,
     forecast_execution_datetime,
+    region,
     vintage_label,
     vintage_anchor_execution_datetime
 from ranked
 where rn = 1
-order by forecast_datetime, forecast_execution_datetime desc
+order by region, forecast_datetime, forecast_execution_datetime desc

@@ -49,7 +49,7 @@ def build_fragments(
 
     logger.info("Pulling RT metered load...")
     df_rt_raw = pull_with_cache(
-        source_name="load_rt_metered_hourly",
+        source_name="pjm_load_rt_metered_hourly",
         pull_fn=load_rt_metered_hourly.pull,
         pull_kwargs={},
         cache_dir=cache_dir,

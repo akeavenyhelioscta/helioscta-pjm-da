@@ -14,7 +14,7 @@ def pull(
     sql_overrides: dict[str, str | int | bool | None] | None = None,
 ) -> pd.DataFrame:
     """Pull hourly fuel mix (actual generation by type) from gridstatus."""
-    sql_file = SQL_DIR / "fuel_mix_hourly.sql"
+    sql_file = SQL_DIR / "pjm_fuel_mix_hourly.sql"
     query = render_sql_template(sql_file, sql_overrides)
 
     logger.info("Pulling fuel mix hourly from gridstatus")
@@ -23,7 +23,7 @@ def pull(
     df["date"] = pd.to_datetime(df["date"]).dt.date
     df = validate_source_frame(
         df=df,
-        source_name="fuel_mix_hourly",
+        source_name="pjm_fuel_mix_hourly",
         required_columns=["date", "hour_ending", "solar", "wind"],
         unique_key_columns=["date", "hour_ending"],
         hourly_coverage_date_col="date",

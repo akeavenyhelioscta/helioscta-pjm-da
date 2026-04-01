@@ -18,7 +18,7 @@ def pull(
     sql_overrides: dict[str, str | int | bool | None] | None = None,
 ) -> pd.DataFrame:
     """Pull hourly weather (observed + forecast) for PJM aggregate station."""
-    sql_file = SQL_DIR / "weather_hourly.sql"
+    sql_file = SQL_DIR / "wsi_weather_hourly.sql"
     overrides: dict[str, str | int | bool | None] = {
         "schema": schema,
         "station": station,
@@ -33,7 +33,7 @@ def pull(
     df["date"] = pd.to_datetime(df["date"]).dt.date
     df = validate_source_frame(
         df=df,
-        source_name="weather_hourly",
+        source_name="wsi_weather_hourly",
         required_columns=["date", "hour_ending", "temp"],
         unique_key_columns=["date", "hour_ending", "station_name"],
         hourly_coverage_date_col="date",

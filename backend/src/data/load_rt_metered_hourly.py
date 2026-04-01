@@ -17,7 +17,7 @@ def pull(
     sql_overrides: dict[str, str | int | bool | None] | None = None,
 ) -> pd.DataFrame:
     """Pull RT metered load hourly data. If region is None, pulls all regions."""
-    sql_file = SQL_DIR / "load_rt_metered_hourly.sql"
+    sql_file = SQL_DIR / "pjm_load_rt_metered_hourly.sql"
     overrides: dict[str, str | int | bool | None] = {"schema": schema, "region": region or ""}
     if sql_overrides:
         overrides.update(sql_overrides)
@@ -29,7 +29,7 @@ def pull(
     df["date"] = pd.to_datetime(df["date"]).dt.date
     df = validate_source_frame(
         df=df,
-        source_name="load_rt_metered_hourly",
+        source_name="pjm_load_rt_metered_hourly",
         required_columns=["date", "hour_ending", "region", "rt_load_mw"],
         unique_key_columns=["date", "hour_ending", "region"],
         hourly_coverage_date_col="date",

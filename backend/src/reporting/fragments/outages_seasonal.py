@@ -70,7 +70,7 @@ def build_fragments(
     )
 
     df = _safe_pull(
-        "outages_actual_daily",
+        "pjm_outages_actual_daily",
         outages_actual_daily.pull,
         {"schema": configs.SCHEMA},
         **cache_kwargs,

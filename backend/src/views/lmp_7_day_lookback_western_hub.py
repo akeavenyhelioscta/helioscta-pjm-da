@@ -180,15 +180,15 @@ if __name__ == "__main__":
     )
 
     df_da = pull_with_cache(
-        source_name="lmps_hourly_da",
+        source_name="pjm_lmps_hourly_da",
         pull_fn=lmps_hourly.pull,
-        pull_kwargs={"market": "da"},
+        pull_kwargs={"schema": configs.SCHEMA, "market": "da"},
         **CACHE,
     )
     df_rt = pull_with_cache(
-        source_name="lmps_hourly_rt",
+        source_name="pjm_lmps_hourly_rt",
         pull_fn=lmps_hourly.pull,
-        pull_kwargs={"market": "rt"},
+        pull_kwargs={"schema": configs.SCHEMA, "market": "rt"},
         **CACHE,
     )
 

@@ -46,29 +46,30 @@ def build_fragments(
         force_refresh=force_refresh,
     )
 
-    # ── Pull data (one cache file, split by source+region in-memory) ──
-    df_all = _safe_pull(
-        "solar_vintage_combined",
-        solar_forecast_vintages.pull_combined_vintages,
+    # ── Pull data (separate cache per provider) ──
+    df_pjm_all = _safe_pull(
+        "pjm_solar_forecast_vintages",
+        solar_forecast_vintages.pull_pjm_vintages,
+        {},
+        **cache_kwargs,
+    )
+    df_meteo_all = _safe_pull(
+        "meteologica_solar_forecast_vintages",
+        solar_forecast_vintages.pull_meteologica_vintages,
         {},
         **cache_kwargs,
     )
 
     pjm_data: dict[str, pd.DataFrame | None] = {}
     meteo_data: dict[str, pd.DataFrame | None] = {}
-    if df_all is not None and len(df_all) > 0:
-        for src_key, target in [("pjm", pjm_data), ("meteologica", meteo_data)]:
-            src_df = df_all[df_all["source"] == src_key] if "source" in df_all.columns else pd.DataFrame()
-            for region in REGIONS:
-                if len(src_df) > 0 and "region" in src_df.columns:
-                    sub = src_df[src_df["region"] == region]
-                    target[region] = sub if len(sub) > 0 else None
-                else:
-                    target[region] = None
-    else:
+    for src_key, src_df_raw, target in [("pjm", df_pjm_all, pjm_data), ("meteologica", df_meteo_all, meteo_data)]:
+        src_df = src_df_raw if src_df_raw is not None and len(src_df_raw) > 0 else pd.DataFrame()
         for region in REGIONS:
-            pjm_data[region] = None
-            meteo_data[region] = None
+            if len(src_df) > 0 and "region" in src_df.columns:
+                sub = src_df[src_df["region"] == region]
+                target[region] = sub if len(sub) > 0 else None
+            else:
+                target[region] = None
 
     # ── Collect all dates for the global filter ──────────────────
     all_dates: set = set()

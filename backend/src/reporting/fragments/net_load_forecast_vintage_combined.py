@@ -49,13 +49,13 @@ def build_fragments(
 
     # ── Pull load data (one cached pull per source, split by region) ──
     pjm_load_all = _safe_pull(
-        "forecast_vintage_pjm",
+        "pjm_load_forecast_vintages",
         load_forecast_vintages.pull_combined_vintages,
         {"source": "pjm"},
         **cache_kwargs,
     )
     meteo_load_all = _safe_pull(
-        "forecast_vintage_meteologica",
+        "meteologica_load_forecast_vintages",
         load_forecast_vintages.pull_combined_vintages,
         {"source": "meteologica"},
         **cache_kwargs,
@@ -73,24 +73,38 @@ def build_fragments(
             else:
                 target[region] = None
 
-    # ── Pull solar data (one cache file, split in-memory) ───────
-    solar_all = _safe_pull(
-        "solar_vintage_combined",
-        solar_forecast_vintages.pull_combined_vintages,
+    # ── Pull solar data (separate cache per provider) ───────
+    pjm_solar_all = _safe_pull(
+        "pjm_solar_forecast_vintages",
+        solar_forecast_vintages.pull_pjm_vintages,
         {},
         **cache_kwargs,
     )
+    meteo_solar_all = _safe_pull(
+        "meteologica_solar_forecast_vintages",
+        solar_forecast_vintages.pull_meteologica_vintages,
+        {},
+        **cache_kwargs,
+    )
+    solar_all = pd.concat([df for df in [pjm_solar_all, meteo_solar_all] if df is not None], ignore_index=True) if any(df is not None for df in [pjm_solar_all, meteo_solar_all]) else None
     pjm_solar: dict[str, pd.DataFrame | None] = {}
     meteo_solar: dict[str, pd.DataFrame | None] = {}
     _split_by_source_region(solar_all, pjm_solar, meteo_solar)
 
-    # ── Pull wind data (one cache file, split in-memory) ─────────
-    wind_all = _safe_pull(
-        "wind_vintage_combined",
-        wind_forecast_vintages.pull_combined_vintages,
+    # ── Pull wind data (separate cache per provider) ─────────
+    pjm_wind_all = _safe_pull(
+        "pjm_wind_forecast_vintages",
+        wind_forecast_vintages.pull_pjm_vintages,
         {},
         **cache_kwargs,
     )
+    meteo_wind_all = _safe_pull(
+        "meteologica_wind_forecast_vintages",
+        wind_forecast_vintages.pull_meteologica_vintages,
+        {},
+        **cache_kwargs,
+    )
+    wind_all = pd.concat([df for df in [pjm_wind_all, meteo_wind_all] if df is not None], ignore_index=True) if any(df is not None for df in [pjm_wind_all, meteo_wind_all]) else None
     pjm_wind: dict[str, pd.DataFrame | None] = {}
     meteo_wind: dict[str, pd.DataFrame | None] = {}
     _split_by_source_region(wind_all, pjm_wind, meteo_wind)

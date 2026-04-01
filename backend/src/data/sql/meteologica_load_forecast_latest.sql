@@ -1,12 +1,12 @@
 -- Meteologica demand forecast, latest execution per target date.
--- Parameterized by {region} (default RTO).
--- Returns the most recent forecast vintage for each (date, hour_ending)
+-- Parameterized by {region} (default: all regions). Pass '' for all.
+-- Returns the most recent forecast vintage for each (region, date, hour_ending)
 -- from today onward (forward-looking only).
 with params as (
     select
         case
-            when left('{region}', 1) = chr(123) and right('{region}', 1) = chr(125) then 'RTO'
-            else coalesce(nullif('{region}', ''), 'RTO')
+            when left('{region}', 1) = chr(123) and right('{region}', 1) = chr(125) then null
+            else nullif('{region}', '')
         end::text as region,
         case
             when left('{timezone}', 1) = chr(123) and right('{timezone}', 1) = chr(125) then 'America/Denver'
@@ -16,7 +16,7 @@ with params as (
 forecast as (
     select
         ROW_NUMBER() over (
-            partition by forecast_date, hour_ending
+            partition by region, forecast_date, hour_ending
             order by forecast_rank desc
         ) as rn,
         forecast_rank,
@@ -28,7 +28,7 @@ forecast as (
         region,
         forecast_load_mw
     from meteologica_cleaned.meteologica_pjm_demand_forecast_hourly
-    where region = (select region from params)
+    where ((select region from params) is null or region = (select region from params))
       and forecast_date >= (CURRENT_TIMESTAMP AT TIME ZONE (select timezone from params))::date
 )
 select
@@ -42,4 +42,4 @@ select
     forecast_load_mw
 from forecast
 where rn = 1
-order by forecast_datetime, forecast_execution_datetime desc
+order by region, forecast_datetime, forecast_execution_datetime desc

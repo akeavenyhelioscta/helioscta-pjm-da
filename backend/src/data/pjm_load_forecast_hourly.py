@@ -31,6 +31,26 @@ def pull(
     return df
 
 
+def pull_da_history(
+    region: str = "RTO",
+    sql_overrides: dict[str, str | int | bool | None] | None = None,
+) -> pd.DataFrame:
+    """Pull full-history DA load forecast (all dates), one row per (date, hour_ending)."""
+    sql_file = SQL_DIR / "pjm_load_forecast_da_history.sql"
+    overrides: dict[str, str | int | bool | None] = {
+        "region": region,
+    }
+    if sql_overrides:
+        overrides.update(sql_overrides)
+    query = render_sql_template(sql_file, overrides)
+    logger.info(f"Pulling PJM load forecast history: {region}")
+
+    df = pull_from_db(query=query)
+    df["forecast_date"] = pd.to_datetime(df["forecast_date"]).dt.date
+    logger.info(f"Pulled {len(df):,} rows")
+    return df
+
+
 def pull_da_cutoff_vintages(
     region: str = "RTO",
     sql_overrides: dict[str, str | int | bool | None] | None = None,

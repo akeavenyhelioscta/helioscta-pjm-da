@@ -250,6 +250,49 @@ def format_like_day_forecast_results(vm: dict) -> str:
     return "\n".join(parts)
 
 
+# ── Meteologica DA Forecast ──────────────────────────────────────────
+
+
+def format_meteologica_da_forecast(vm: dict) -> str:
+    """Format Meteologica DA price forecast in the same style as like-day results."""
+    if "error" in vm:
+        return f"# Error\n\n{vm['error']}"
+
+    parts: list[str] = []
+    parts.append(
+        f"# Meteologica DA Forecast — {vm.get('forecast_date', '?')}"
+    )
+    if vm.get("execution_timestamp"):
+        parts.append(f"\n*Execution: {vm['execution_timestamp']}*")
+
+    # Period Summary
+    summary = vm.get("summary", {})
+    if summary:
+        parts.append("\n## Period Summary ($/MWh)")
+        headers = ["Period", "Forecast"]
+        rows = []
+        for pkey, plabel in [("on_peak", "On-Peak"), ("off_peak", "Off-Peak"), ("flat", "Flat")]:
+            s = summary.get(pkey, {})
+            rows.append([plabel, _fmt2(s.get("forecast"))])
+        parts.append(_table(headers, rows))
+
+    # Hourly Detail
+    hourly = vm.get("hourly", [])
+    if hourly:
+        parts.append("\n## Hourly Detail ($/MWh)")
+        headers = ["HE", "Period", "Forecast"]
+        rows = []
+        for hr in hourly:
+            rows.append([
+                hr["hour"],
+                "on" if hr["period"] == "on_peak" else "off",
+                _fmt2(hr.get("forecast")),
+            ])
+        parts.append(_table(headers, rows))
+
+    return "\n".join(parts)
+
+
 # ── Load Forecast Vintages ──────────────────────────────────────────
 
 
@@ -684,6 +727,130 @@ def format_outages_forecast_vintages(vm: dict) -> str:
             rows.append(row)
 
         parts.append(_table(headers, rows))
+
+    return "\n".join(parts)
+
+
+# ── Like-Day Strip Forecast Results ────────────────────────────────
+
+
+# ── ICE Power Intraday ────────────────────────────────────────────
+
+
+def format_ice_power_intraday(vm: dict) -> str:
+    """Format the ICE power intraday view model as markdown.
+
+    Two sections: daily settlement history and current-session intraday tape.
+    """
+    if "error" in vm:
+        return f"# Error\n\n{vm['error']}"
+
+    parts: list[str] = []
+    parts.append("# ICE PJM Power — Settlements & Intraday Tape")
+
+    # --- Settlement History ---
+    settles = vm.get("settlements")
+    if settles:
+        dr = settles.get("date_range", {})
+        products = settles.get("products", [])
+        parts.append(f"\n## Settlement History ({dr.get('start', '?')} to {dr.get('end', '?')})")
+
+        # Product metadata summary
+        product_meta = settles.get("product_meta", {})
+        if product_meta:
+            meta_lines = []
+            for p, meta in product_meta.items():
+                peak = meta.get("peak_type", "unknown")
+                meta_lines.append(f"- **{p}** ({meta.get('symbol', '?')}): {peak}")
+            parts.append("\n" + "\n".join(meta_lines))
+
+        # Cross-product daily matrix
+        matrix = settles.get("daily_matrix", [])
+        if matrix and products:
+            headers = ["Trade Date", "Delivery"] + products
+            rows = []
+            for entry in matrix:
+                # Use first product's delivery date as representative
+                delivery = None
+                for p in products:
+                    dd = entry.get(f"{p}_delivery")
+                    if dd:
+                        delivery = dd
+                        break
+                row = [entry["trade_date"], delivery or "—"]
+                for p in products:
+                    row.append(_fmt2(entry.get(p)))
+                rows.append(row)
+            parts.append("\n### Daily Settle ($/MWh)")
+            parts.append(_table(headers, rows))
+
+        # Per-product detail
+        by_product = settles.get("by_product", {})
+        for product in products:
+            prows = by_product.get(product, [])
+            if not prows:
+                continue
+            meta = product_meta.get(product, {})
+            peak_label = f" ({meta.get('peak_type', '')})" if meta.get("peak_type") else ""
+            parts.append(f"\n### {product}{peak_label}")
+            headers = ["Trade Date", "Delivery", "Settle", "Prior", "Chg", "VWAP", "High", "Low", "Volume"]
+            rows = []
+            for r in prows:
+                rows.append([
+                    r["trade_date"],
+                    r.get("delivery_date") or "—",
+                    _fmt2(r.get("settle")),
+                    _fmt2(r.get("prior_settle")),
+                    _fmt2(r.get("settle_vs_prior")),
+                    _fmt2(r.get("vwap")),
+                    _fmt2(r.get("high")),
+                    _fmt2(r.get("low")),
+                    _fmt0(r.get("volume")),
+                ])
+            parts.append(_table(headers, rows))
+
+    # --- Intraday Tape ---
+    intraday = vm.get("intraday")
+    if intraday:
+        dr = intraday.get("date_range", {})
+        products = intraday.get("products", [])
+        parts.append(f"\n## Intraday Tape ({dr.get('start', '?')} to {dr.get('end', '?')})")
+
+        intraday_meta = intraday.get("product_meta", {})
+        by_product = intraday.get("by_product", {})
+        for product in products:
+            pdata = by_product.get(product, {})
+            meta = intraday_meta.get(product, {})
+            peak_label = f" [{meta.get('peak_type', '')}]" if meta.get("peak_type") else ""
+            for d in sorted(pdata.keys()):
+                session = pdata[d]
+                dd = session.get("delivery_date")
+                delivery_label = f" → delivery {dd}" if dd else ""
+                parts.append(
+                    f"\n### {product}{peak_label} — {d}{delivery_label}"
+                    f" (Open: {_fmt2(session.get('session_open'))}"
+                    f"  High: {_fmt2(session.get('session_high'))}"
+                    f"  Low: {_fmt2(session.get('session_low'))}"
+                    f"  Last: {_fmt2(session.get('session_last'))}"
+                    f"  VWAP: {_fmt2(session.get('session_vwap'))}"
+                    f"  Vol: {_fmt0(session.get('session_volume'))})"
+                )
+                snaps = session.get("snapshots", [])
+                if snaps:
+                    headers = ["Time ET", "Bid", "Ask", "Spread", "Last", "VWAP", "Vol", "Chg"]
+                    rows = []
+                    for s in snaps:
+                        rows.append([
+                            s["time_et"],
+                            _fmt2(s.get("bid")),
+                            _fmt2(s.get("ask")),
+                            _fmt2(s.get("spread")),
+                            _fmt2(s.get("last_px")),
+                            _fmt2(s.get("vwap")),
+                            _fmt0(s.get("volume")),
+                            _fmt2(s.get("last_chg")),
+                        ])
+                    parts.append(_table(headers, rows))
 
     return "\n".join(parts)
 

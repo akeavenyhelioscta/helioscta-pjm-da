@@ -118,7 +118,14 @@ def run(
 
     # 1. Build daily feature matrix
     logger.info("Building daily feature matrix...")
-    df_features = build_daily_features(schema=config.schema, hub=config.hub, **builder_cache_kwargs)
+    df_features = build_daily_features(
+        schema=config.schema,
+        hub=config.hub,
+        renewable_mode=config.resolved_renewable_mode(),
+        renewable_region=config.renewable_forecast_region,
+        renewable_blend_pjm_weight=config.renewable_blend_weight(offset=1),
+        **builder_cache_kwargs,
+    )
 
     available_dates = sorted(df_features["date"].unique())
     logger.info(f"Feature matrix: {len(available_dates):,} days "
@@ -138,6 +145,8 @@ def run(
         feature_weights=config.resolved_weights(),
         apply_calendar_filter=config.apply_calendar_filter,
         apply_regime_filter=config.apply_regime_filter,
+        apply_outage_regime_filter=config.apply_outage_regime_filter,
+        outage_tolerance_std=config.outage_tolerance_std,
         season_window_days=config.season_window_days,
         same_dow_group=config.same_dow_group,
         weight_method=config.weight_method,
@@ -155,11 +164,12 @@ def run(
     # 3. Pull raw hourly DA LMP data (cache hit if builder already cached it)
     logger.info("Pulling hourly DA LMP data for analog next-days...")
     df_lmp_all = pull_with_cache(
-        source_name="lmps_hourly_da",
+        source_name="pjm_lmps_hourly_da",
         pull_fn=lmps_hourly.pull,
-        pull_kwargs={"schema": config.schema, "hub": config.hub, "market": "da"},
+        pull_kwargs={"schema": config.schema, "market": "da"},
         **pull_cache_kwargs,
     )
+    df_lmp_all = df_lmp_all[df_lmp_all["hub"] == config.hub].copy()
     # Safety: parquet round-trip may convert date to datetime64
     df_lmp_all["date"] = pd.to_datetime(df_lmp_all["date"]).dt.date
 

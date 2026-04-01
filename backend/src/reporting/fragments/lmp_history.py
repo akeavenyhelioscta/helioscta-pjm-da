@@ -62,7 +62,7 @@ def build_fragments(
 
     logger.info("Pulling DA LMP hourly...")
     df_da = pull_with_cache(
-        source_name="lmps_hourly_da",
+        source_name="pjm_lmps_hourly_da",
         pull_fn=lmps_hourly.pull,
         pull_kwargs={"schema": schema, "market": "da"},
         **cache_kwargs,
@@ -71,7 +71,7 @@ def build_fragments(
 
     logger.info("Pulling RT LMP hourly...")
     df_rt = pull_with_cache(
-        source_name="lmps_hourly_rt",
+        source_name="pjm_lmps_hourly_rt",
         pull_fn=lmps_hourly.pull,
         pull_kwargs={"schema": schema, "market": "rt"},
         **cache_kwargs,

@@ -269,7 +269,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     df = pull_with_cache(
-        source_name="outages_actual_daily",
+        source_name="pjm_outages_actual_daily",
         pull_fn=outages_actual_daily.pull,
         pull_kwargs={"schema": configs.SCHEMA},
         cache_dir=configs.CACHE_DIR,

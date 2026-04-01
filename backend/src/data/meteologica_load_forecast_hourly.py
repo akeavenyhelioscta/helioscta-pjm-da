@@ -15,7 +15,10 @@ def pull(
     region: str = "RTO",
     sql_overrides: dict[str, str | int | bool | None] | None = None,
 ) -> pd.DataFrame:
-    """Pull latest Meteologica load forecast from today onward, one row per (date, hour_ending)."""
+    """Pull latest Meteologica load forecast from today onward.
+
+    Pass region="" to pull all regions in one query.
+    """
     sql_file = SQL_DIR / "meteologica_load_forecast_latest.sql"
     overrides: dict[str, str | int | bool | None] = {
         "region": region,
@@ -23,7 +26,8 @@ def pull(
     if sql_overrides:
         overrides.update(sql_overrides)
     query = render_sql_template(sql_file, overrides)
-    logger.info(f"Pulling Meteologica load forecast: {region}, today onward")
+    label = region or "ALL REGIONS"
+    logger.info(f"Pulling Meteologica load forecast: {label}, today onward")
 
     df = pull_from_db(query=query)
     df["forecast_date"] = pd.to_datetime(df["forecast_date"]).dt.date
@@ -35,7 +39,10 @@ def pull_da_cutoff_vintages(
     region: str = "RTO",
     sql_overrides: dict[str, str | int | bool | None] | None = None,
 ) -> pd.DataFrame:
-    """Pull 4 DA cutoff vintages: DA Cutoff, DA -12h, DA -24h, DA -48h."""
+    """Pull 4 DA cutoff vintages: DA Cutoff, DA -12h, DA -24h, DA -48h.
+
+    Pass region="" to pull all regions in one query.
+    """
     sql_file = SQL_DIR / "meteologica_load_forecast_da_cutoff_vintages.sql"
     overrides: dict[str, str | int | bool | None] = {
         "region": region,
@@ -43,7 +50,8 @@ def pull_da_cutoff_vintages(
     if sql_overrides:
         overrides.update(sql_overrides)
     query = render_sql_template(sql_file, overrides)
-    logger.info(f"Pulling Meteologica DA cutoff vintages: {region}")
+    label = region or "ALL REGIONS"
+    logger.info(f"Pulling Meteologica DA cutoff vintages: {label}")
 
     df = pull_from_db(query=query)
     df["forecast_date"] = pd.to_datetime(df["forecast_date"]).dt.date

@@ -34,6 +34,8 @@ from src.reporting.fragments import solar_forecast_vintage_combined as solar_for
 from src.reporting.fragments import wind_forecast_vintage_combined as wind_forecast_vintage_combined_fragments
 from src.reporting.fragments import net_load_forecast_vintage_combined as net_load_forecast_vintage_combined_fragments
 from src.reporting.fragments import forecast_results as forecast_results_fragments
+from src.reporting.fragments import market_adjusted_forecast as market_adjusted_forecast_fragments
+from src.reporting.fragments import regression_adjusted_forecast as regression_adjusted_forecast_fragments
 from src.reporting.fragments import fuel_mix as fuel_mix_fragments
 from src.reporting.fragments import lmp_history as lmp_history_fragments
 from src.reporting.fragments import outages_forecast_rto as outages_forecast_rto_fragments
@@ -41,6 +43,10 @@ from src.reporting.fragments import outages_term_bible as outages_term_bible_fra
 from src.reporting.fragments import outages_seasonal as outages_seasonal_fragments
 from src.reporting.fragments import meteologica_da_price_forecast as meteologica_da_price_forecast_fragments
 from src.reporting.fragments import strip_forecast as strip_forecast_fragments
+from src.reporting.fragments import data_inspection as data_inspection_fragments
+from src.reporting.fragments import balday as balday_fragments
+from src.reporting.fragments import regional_spark_spreads as regional_spark_spreads_fragments
+from src.reporting.fragments import tie_flows as tie_flows_fragments
 from src.reporting.master_report import build_master
 from src.utils.azure_blob_storage_utils import AzureBlobStorageClient
 
@@ -53,18 +59,24 @@ REPORT_OUTPUT_DIR = Path(__file__).parent / "output"
 # Register fragment builders here — add new sources as they're implemented.
 FRAGMENT_REGISTRY = {
     "forecast_results": ("Like Day Model", forecast_results_fragments.build_fragments),
+    "market_adjusted_forecast": ("Market-Adjusted Forecast", market_adjusted_forecast_fragments.build_fragments),
+    "regression_adjusted_forecast": ("Regression-Adjusted Forecast", regression_adjusted_forecast_fragments.build_fragments),
     "meteologica_da_price_forecast": ("Meteologica DA Price Forecast", meteologica_da_price_forecast_fragments.build_fragments),
     "strip_forecast": ("Strip Forecast", strip_forecast_fragments.build_fragments),
+    "balday": ("Bal Day", balday_fragments.build_fragments),
     "rt_load_metered_rto": ("RT Load Metered RTO", rt_load_metered_rto_fragments.build_fragments),
     "load_forecast_vintage_combined": ("Load Forecast Vintages", load_forecast_vintage_combined_fragments.build_fragments),
     "solar_forecast_vintage_combined": ("Solar Forecast Vintages", solar_forecast_vintage_combined_fragments.build_fragments),
     "wind_forecast_vintage_combined": ("Wind Forecast Vintages", wind_forecast_vintage_combined_fragments.build_fragments),
     "net_load_forecast_vintage_combined": ("Net Load Forecast Vintages", net_load_forecast_vintage_combined_fragments.build_fragments),
+    "regional_spark_spreads": ("Regional Spark Spreads", regional_spark_spreads_fragments.build_fragments),
     "fuel_mix": ("Fuel Mix", fuel_mix_fragments.build_fragments),
     "lmp_history": ("LMP History", lmp_history_fragments.build_fragments),
     "outages_forecast_rto": ("Forecast Outages RTO", outages_forecast_rto_fragments.build_fragments),
     "outages_term_bible": ("Outages Term Bible", outages_term_bible_fragments.build_fragments),
     "outages_seasonal": ("Seasonal Outages RTO", outages_seasonal_fragments.build_fragments),
+    "tie_flows": ("Tie Flows", tie_flows_fragments.build_fragments),
+    "data_inspection": ("Data Inspection", data_inspection_fragments.build_fragments),
     # "lmp": ("LMP Data", lmp_fragments.build_fragments),
     # "gas": ("Gas Prices", gas_fragments.build_fragments),
     # "weather": ("Weather", weather_fragments.build_fragments),

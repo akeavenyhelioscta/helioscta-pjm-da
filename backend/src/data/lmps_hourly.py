@@ -18,7 +18,7 @@ def pull(
     sql_overrides: dict[str, str | int | bool | None] | None = None,
 ) -> pd.DataFrame:
     """Pull hourly LMP data. If hub is None, pulls all hubs."""
-    sql_file = SQL_DIR / "lmps_hourly.sql"
+    sql_file = SQL_DIR / "pjm_lmps_hourly.sql"
     overrides: dict[str, str | int | bool | None] = {
         "schema": schema,
         "hub": hub or "",

@@ -32,7 +32,7 @@ forecast as (
         ,coalesce(f.feels_like_temperature, f.temperature) as feels_like_temp
         ,f.dewpoint as dew_point_temp
         ,f.wind_speed as wind_speed_mph
-        ,f.relative_humidity
+        ,null::numeric as relative_humidity
         ,f.cloud_cover_pct
     from {schema}.temp_forecast_hourly f
     where f.station_name = (select station from params)
