@@ -32,6 +32,7 @@ from src.views.transmission_outages import build_view_model as tx_outage_view_mo
 from src.views.outages_forecast_vintages import build_view_model as outage_fcst_view_model
 from src.views.ice_power_intraday import build_view_model as ice_power_view_model
 from src.views.meteologica_da_forecast import build_view_model as meteo_da_view_model
+from src.views.regional_congestion import build_view_model as regional_congestion_view_model
 from src.views.markdown_formatters import (
     format_lmp_7day,
     format_like_day_forecast_results,
@@ -44,6 +45,9 @@ from src.views.markdown_formatters import (
     format_outages_forecast_vintages,
     format_ice_power_intraday,
     format_meteologica_da_forecast,
+    format_regional_congestion,
+    format_lasso_qr_forecast_results,
+    format_lasso_qr_strip_forecast_results,
 )
 
 
@@ -84,12 +88,19 @@ def health():
 @app.get("/views/like_day_forecast_results")
 def get_like_day_forecast_results(
     forecast_date: str | None = Query(None, description="YYYY-MM-DD, defaults to tomorrow"),
+    exclude_dates: str | None = Query(None, description="Comma-separated YYYY-MM-DD dates to exclude from analog pool"),
+    exclude_holidays: bool = Query(True, description="Exclude NERC holidays from analog pool when target is not a holiday"),
     format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
 ):
     """Run the like-day forecast and return the structured view model with analog days."""
+    parsed_exclude = [d.strip() for d in exclude_dates.split(",") if d.strip()] if exclude_dates else []
     result = run_forecast(
         forecast_date=forecast_date,
-        config=configs.ScenarioConfig(forecast_date=forecast_date),
+        config=configs.ScenarioConfig(
+            forecast_date=forecast_date,
+            exclude_dates=parsed_exclude,
+            exclude_holidays=exclude_holidays,
+        ),
         cache_dir=configs.CACHE_DIR,
         cache_enabled=configs.CACHE_ENABLED,
         cache_ttl_hours=configs.CACHE_TTL_HOURS,
@@ -139,12 +150,19 @@ def get_market_adjusted_forecast(
 @app.get("/views/regression_adjusted_forecast")
 def get_regression_adjusted_forecast(
     forecast_date: str | None = Query(None, description="YYYY-MM-DD, defaults to tomorrow"),
+    exclude_dates: str | None = Query(None, description="Comma-separated YYYY-MM-DD dates to exclude from analog pool"),
+    exclude_holidays: bool = Query(True, description="Exclude NERC holidays from analog pool when target is not a holiday"),
     format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
 ):
     """Apply regression correction based on fundamental deltas vs analog-weighted averages."""
+    parsed_exclude = [d.strip() for d in exclude_dates.split(",") if d.strip()] if exclude_dates else []
     result = run_regression_forecast(
         forecast_date=forecast_date,
-        config=configs.ScenarioConfig(forecast_date=forecast_date),
+        config=configs.ScenarioConfig(
+            forecast_date=forecast_date,
+            exclude_dates=parsed_exclude,
+            exclude_holidays=exclude_holidays,
+        ),
         cache_dir=configs.CACHE_DIR,
         cache_enabled=configs.CACHE_ENABLED,
         cache_ttl_hours=configs.CACHE_TTL_HOURS,
@@ -188,6 +206,75 @@ def get_regression_adjusted_forecast(
     header += f"| **Total** | | | | **{adj.get('total_onpeak', 0):+.2f}** | **{adj.get('total_offpeak', 0):+.2f}** |\n\n"
     md = format_like_day_forecast_results(vm)
     return PlainTextResponse(content=header + md, media_type="text/markdown")
+
+
+@app.get("/views/scenario_forecast")
+def get_scenario_forecast(
+    scenarios: str = Query(
+        "holiday,high_outage_stress,low_wind",
+        description="Comma-separated scenario preset names (e.g., 'holiday,low_wind,bull,bear')",
+    ),
+    forecast_date: str | None = Query(None, description="YYYY-MM-DD, defaults to tomorrow"),
+    exclude_dates: str | None = Query(None, description="Comma-separated YYYY-MM-DD dates to exclude from analog pool"),
+    exclude_holidays: bool = Query(True, description="Exclude NERC holidays from analog pool when target is not a holiday"),
+    format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
+):
+    """Run multiple what-if scenarios and return a comparison table."""
+    from src.like_day_forecast.pipelines.scenario_forecast import (
+        format_comparison_markdown,
+        run as run_scenarios,
+    )
+
+    scenario_list = [s.strip() for s in scenarios.split(",") if s.strip()]
+    parsed_exclude = [d.strip() for d in exclude_dates.split(",") if d.strip()] if exclude_dates else []
+    result = run_scenarios(
+        scenarios=scenario_list,
+        forecast_date=forecast_date,
+        base_config=configs.ScenarioConfig(
+            forecast_date=forecast_date,
+            exclude_dates=parsed_exclude,
+            exclude_holidays=exclude_holidays,
+        ),
+        cache_dir=configs.CACHE_DIR,
+        cache_enabled=configs.CACHE_ENABLED,
+        cache_ttl_hours=configs.CACHE_TTL_HOURS,
+        force_refresh=configs.FORCE_CACHE_REFRESH,
+    )
+
+    if format == OutputFormat.json:
+        comparison = result["comparison_table"].to_dict(orient="records")
+        per_scenario_summary = {}
+        for name, res in result["per_scenario"].items():
+            adj = res.get("adjustment", {})
+            per_scenario_summary[name] = {
+                "model_onpeak": adj.get("base_onpeak"),
+                "model_offpeak": adj.get("base_offpeak"),
+                "onpeak": adj.get("adj_onpeak"),
+                "offpeak": adj.get("adj_offpeak"),
+                "total_adj_onpeak": adj.get("total_onpeak"),
+                "total_adj_offpeak": adj.get("total_offpeak"),
+                "n_analogs": res.get("n_analogs_used"),
+                "deltas": [
+                    {
+                        "factor": d.label,
+                        "delta": d.delta,
+                        "unit": d.unit,
+                        "adj_onpeak": d.adj_onpeak,
+                        "adj_offpeak": d.adj_offpeak,
+                    }
+                    for d in res.get("deltas", [])
+                ],
+                "overrides": res.get("fundamental_overrides_applied", {}),
+            }
+        return {
+            "forecast_date": result["forecast_date"],
+            "scenarios_run": result["scenarios_run"],
+            "comparison": comparison,
+            "per_scenario": per_scenario_summary,
+        }
+
+    md = format_comparison_markdown(result)
+    return PlainTextResponse(content=md, media_type="text/markdown")
 
 
 @app.get("/views/like_day_strip_forecast_results")
@@ -380,6 +467,34 @@ def get_transmission_outages(
     return PlainTextResponse(content=format_transmission_outages(vm), media_type="text/markdown")
 
 
+@app.get("/views/regional_congestion")
+def get_regional_congestion(
+    format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
+):
+    """Return DA/RT congestion pricing across PJM regional hubs (last 7 days)."""
+    from datetime import date, timedelta
+
+    start = date.today() - timedelta(days=7)
+    df_da = pull_with_cache(
+        source_name="pjm_lmps_hourly_da",
+        pull_fn=lmps_hourly.pull,
+        pull_kwargs={"schema": configs.SCHEMA, "market": "da"},
+        **CACHE_KWARGS,
+    )
+    df_da = df_da[pd.to_datetime(df_da["date"]).dt.date >= start]
+    df_rt = pull_with_cache(
+        source_name="pjm_lmps_hourly_rt",
+        pull_fn=lmps_hourly.pull,
+        pull_kwargs={"schema": configs.SCHEMA, "market": "rt"},
+        **CACHE_KWARGS,
+    )
+    df_rt = df_rt[pd.to_datetime(df_rt["date"]).dt.date >= start]
+    vm = regional_congestion_view_model(df_da, df_rt)
+    if format == OutputFormat.json:
+        return vm
+    return PlainTextResponse(content=format_regional_congestion(vm), media_type="text/markdown")
+
+
 @app.get("/views/ice_power_intraday")
 def get_ice_power_intraday(
     settle_lookback_days: int = Query(30, description="Lookback days for settlement history"),
@@ -428,6 +543,46 @@ def get_meteologica_da_forecast(
     if format == OutputFormat.json:
         return vm
     return PlainTextResponse(content=format_meteologica_da_forecast(vm), media_type="text/markdown")
+
+
+@app.get("/views/lasso_qr_forecast_results")
+def get_lasso_qr_forecast_results(
+    forecast_date: str | None = Query(None, description="YYYY-MM-DD, defaults to tomorrow"),
+    format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
+):
+    """Run LASSO Quantile Regression forecast and return structured view model."""
+    from src.lasso_quantile_regression.pipelines.forecast import run as run_lasso_qr
+    from src.lasso_quantile_regression.configs import LassoQRConfig
+    from src.views.lasso_qr_forecast_results import build_view_model as lasso_qr_view
+
+    config = LassoQRConfig(forecast_date=forecast_date)
+    result = run_lasso_qr(config=config)
+    vm = lasso_qr_view(result)
+    if format == OutputFormat.json:
+        return vm
+    return PlainTextResponse(
+        content=format_lasso_qr_forecast_results(vm), media_type="text/markdown",
+    )
+
+
+@app.get("/views/lasso_qr_strip_forecast_results")
+def get_lasso_qr_strip_forecast_results(
+    horizon: int = Query(3, description="Number of days ahead to forecast (1-7)"),
+    format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
+):
+    """Run LASSO QR strip forecast (D+1 through D+N) and return structured view model."""
+    from src.lasso_quantile_regression.pipelines.strip_forecast import run_strip as run_lasso_strip
+    from src.lasso_quantile_regression.configs import LassoQRConfig
+    from src.views.lasso_qr_strip_forecast_results import build_view_model as lasso_strip_view
+
+    config = LassoQRConfig()
+    result = run_lasso_strip(horizon=min(horizon, 7), config=config)
+    vm = lasso_strip_view(result)
+    if format == OutputFormat.json:
+        return vm
+    return PlainTextResponse(
+        content=format_lasso_qr_strip_forecast_results(vm), media_type="text/markdown",
+    )
 
 
 # ── MCP integration — exposes all endpoints as agent tools ──────────

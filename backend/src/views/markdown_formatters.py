@@ -605,7 +605,8 @@ def format_transmission_outages(vm: dict) -> str:
     if regional:
         parts.append("\n## Regional Summary")
         headers = [
-            "Region", "Total", "765kV", "500kV", "345kV", "230kV",
+            "Region", "Total", "Lines", "Equip",
+            "765kV", "500kV", "345kV", "230kV",
             "Risk", "Longest Out", "Soonest Return",
         ]
         rows = []
@@ -613,6 +614,8 @@ def format_transmission_outages(vm: dict) -> str:
             rows.append([
                 r["region"],
                 r["total"],
+                r.get("path_count") or "-",
+                r.get("capacity_count") or "-",
                 r["count_765kv"] or "-",
                 r["count_500kv"] or "-",
                 r["count_345kv"] or "-",
@@ -628,17 +631,26 @@ def format_transmission_outages(vm: dict) -> str:
     if notable:
         parts.append(f"\n## Notable Outages ({len(notable)})")
         headers = [
-            "Tags", "Region", "Facility", "Equip", "kV",
+            "Tags", "Region", "Facility", "Type", "kV", "Route",
             "Started", "Est Return", "Days Out", "Days Left", "Cause",
         ]
         rows = []
         for n in notable:
+            # Build route display: FROM→TO for lines, station for equipment
+            if n.get("from_station") and n.get("to_station"):
+                route = f"{n['from_station']}→{n['to_station']}"
+            elif n.get("station"):
+                route = n["station"]
+            else:
+                route = "-"
+
             rows.append([
                 ", ".join(n["tags"]),
                 n["region"],
                 n.get("facility", "")[:40],  # truncate long facility names
-                n.get("equip", ""),
+                n.get("equip_category", n.get("equip", "")),
                 n["kv"],
+                route,
                 n.get("started", "-"),
                 n.get("est_return", "-"),
                 n.get("days_out", "-"),
@@ -652,16 +664,25 @@ def format_transmission_outages(vm: dict) -> str:
     if cancelled:
         parts.append(f"\n## Recently Cancelled ({len(cancelled)}, last 7 days)")
         headers = [
-            "Region", "Facility", "Equip", "kV",
+            "Region", "Facility", "Type", "kV", "Route",
             "Was Sched Start", "Was Sched End", "Cancelled", "Cause",
         ]
         rows = []
         for c in cancelled:
+            # Build route display: FROM→TO for lines, station for equipment
+            if c.get("from_station") and c.get("to_station"):
+                route = f"{c['from_station']}→{c['to_station']}"
+            elif c.get("station"):
+                route = c["station"]
+            else:
+                route = "-"
+
             rows.append([
                 c["region"],
                 c.get("facility", "")[:40],
-                c.get("equip", ""),
+                c.get("equip_category", c.get("equip", "")),
                 c["kv"],
+                route,
                 c.get("was_scheduled_start", "-"),
                 c.get("was_scheduled_end", "-"),
                 c.get("cancelled_date", "-"),
@@ -954,5 +975,263 @@ def format_like_day_strip_forecast_results(vm: dict) -> str:
                 row.extend([_fmt2(hr.get("p10")), _fmt2(hr.get("p90"))])
             rows.append(row)
         parts.append(_table(headers, rows))
+
+    return "\n".join(parts)
+
+
+# ── LASSO QR Forecast ────────────────────────────────────────────────
+
+
+def format_lasso_qr_forecast_results(vm: dict) -> str:
+    """Format the LASSO QR single-day forecast view model as markdown."""
+    if "error" in vm:
+        return f"# Error\n\n{vm['error']}"
+
+    parts: list[str] = []
+    mi = vm.get("model_info", {})
+    parts.append(
+        f"# LASSO QR Forecast — {vm.get('forecast_date', '?')}"
+        f" (alpha={mi.get('alpha', '?')}, {mi.get('n_features', '?')} features,"
+        f" {mi.get('n_train_samples', '?')} samples)"
+    )
+
+    # Summary
+    summary = vm.get("summary", {})
+    bands_list = vm.get("bands", [])
+    bands = {b["band"]: b for b in bands_list if "band" in b}
+    parts.append("\n## Summary ($/MWh)")
+    headers = ["Period", "Fcst", "Actual", "Error", "P10", "P25", "P50", "P75", "P90"]
+    rows = []
+    for pkey, label in [("on_peak", "OnPeak"), ("off_peak", "OffPeak"), ("flat", "Flat")]:
+        s = summary.get(pkey, {})
+        row = [
+            label,
+            _fmt2(s.get("forecast")),
+            _fmt2(s.get("actual")),
+            _fmt2(s.get("error")),
+        ]
+        for b in ["P10", "P25", "P50", "P75", "P90"]:
+            row.append(_fmt2(bands.get(b, {}).get(label)))
+        rows.append(row)
+    parts.append(_table(headers, rows))
+
+    # Hourly
+    hourly = vm.get("hourly", [])
+    if hourly:
+        parts.append("\n## Hourly Detail ($/MWh)")
+        has_act = any(hr.get("actual") is not None for hr in hourly)
+        headers = ["HE", "Period", "Fcst"]
+        if has_act:
+            headers.extend(["Actual", "Error"])
+        headers.extend(["P10", "P90"])
+        rows = []
+        for hr in hourly:
+            row = [
+                hr["hour"],
+                "on" if hr["period"] == "on_peak" else "off",
+                _fmt2(hr.get("forecast")),
+            ]
+            if has_act:
+                row.extend([_fmt2(hr.get("actual")), _fmt2(hr.get("error"))])
+            row.extend([_fmt2(hr.get("p10")), _fmt2(hr.get("p90"))])
+            rows.append(row)
+        parts.append(_table(headers, rows))
+
+    # Feature importances
+    importances = mi.get("feature_importances", [])
+    if importances:
+        parts.append("\n## Top Features (by |coefficient|)")
+        headers = ["Rank", "Feature", "Importance"]
+        rows = [[i + 1, f["feature"], _fmt(f["importance"], 4)] for i, f in enumerate(importances)]
+        parts.append(_table(headers, rows))
+
+    return "\n".join(parts)
+
+
+def format_lasso_qr_strip_forecast_results(vm: dict) -> str:
+    """Format the LASSO QR strip forecast view model as markdown."""
+    if "error" in vm:
+        return f"# Error\n\n{vm['error']}"
+
+    parts: list[str] = []
+    mi = vm.get("model_info", {})
+    n_days = len(vm.get("forecast_dates", []))
+    parts.append(
+        f"# LASSO QR Strip Forecast — ref: {vm.get('reference_date', '?')}"
+        f" ({n_days} days, alpha={mi.get('alpha', '?')},"
+        f" {mi.get('n_features', '?')} features)"
+    )
+
+    # Strip summary
+    strip = vm.get("strip", [])
+    if strip:
+        parts.append("\n## Strip Summary ($/MWh)")
+        headers = [
+            "Date", "D+",
+            "OnPk Fcst", "OnPk P10", "OnPk P90",
+            "OffPk Fcst", "OffPk P10", "OffPk P90",
+            "Flat Fcst",
+        ]
+        rows = []
+        for d in strip:
+            s = d.get("summary", {})
+            b = d.get("bands", {})
+            rows.append([
+                d["date"],
+                d.get("offset", "-"),
+                _fmt2(s.get("on_peak", {}).get("forecast")),
+                _fmt2(b.get("P10", {}).get("on_peak")),
+                _fmt2(b.get("P90", {}).get("on_peak")),
+                _fmt2(s.get("off_peak", {}).get("forecast")),
+                _fmt2(b.get("P10", {}).get("off_peak")),
+                _fmt2(b.get("P90", {}).get("off_peak")),
+                _fmt2(s.get("flat", {}).get("forecast")),
+            ])
+        parts.append(_table(headers, rows))
+
+    # Hourly detail per day
+    for d in strip:
+        hourly = d.get("hourly", [])
+        if not hourly:
+            continue
+        label = f"D+{d.get('offset', '?')}: {d['date']}"
+        has_bands = "p10" in hourly[0]
+        parts.append(f"\n## {label} — Hourly Detail ($/MWh)")
+        headers = ["HE", "Period", "Fcst"]
+        if has_bands:
+            headers.extend(["P10", "P90"])
+        rows = []
+        for hr in hourly:
+            row = [
+                hr["hour"],
+                "on" if hr["period"] == "on_peak" else "off",
+                _fmt2(hr.get("forecast")),
+            ]
+            if has_bands:
+                row.extend([_fmt2(hr.get("p10")), _fmt2(hr.get("p90"))])
+            rows.append(row)
+        parts.append(_table(headers, rows))
+
+    return "\n".join(parts)
+
+
+# ── Regional Congestion ───────────────────────────────────────────────
+
+
+def format_regional_congestion(vm: dict) -> str:
+    """Format the regional congestion view model as markdown.
+
+    Three sections:
+      1. Daily congestion heatmap — all hubs side-by-side, DA and RT
+      2. Cross-hub congestion spreads — directional constraint signals
+      3. Per-hub hourly congestion — pivoted HE1-24 detail for each hub
+    """
+    if "error" in vm:
+        return f"# Error\n\n{vm['error']}"
+
+    parts: list[str] = []
+    dr = vm.get("date_range", {})
+    parts.append(f"# Regional Congestion — {dr.get('start', '?')} to {dr.get('end', '?')}")
+
+    hub_shorts = {"WESTERN HUB": "West", "AEP GEN HUB": "AEP",
+                  "DOMINION HUB": "Dom", "EASTERN HUB": "East"}
+    hubs = vm.get("hubs", [])
+
+    # --- Section 1: Daily DA congestion heatmap (on-peak) ---
+    daily = vm.get("daily_congestion", [])
+    if daily:
+        parts.append("\n## DA Congestion by Region — On-Peak ($/MWh)")
+        headers = ["Date"] + [hub_shorts.get(h, h) + " OnPk" for h in hubs] + \
+                  [hub_shorts.get(h, h) + " Flat" for h in hubs]
+        rows = []
+        for d in daily:
+            row = [d["date"]]
+            for h in hubs:
+                short = hub_shorts.get(h, h)
+                row.append(_fmt2(d.get(f"{short}_da_onpk")))
+            for h in hubs:
+                short = hub_shorts.get(h, h)
+                row.append(_fmt2(d.get(f"{short}_da_flat")))
+            rows.append(row)
+        parts.append(_table(headers, rows))
+
+    # --- Section 2: Daily RT congestion heatmap (on-peak) ---
+    if daily:
+        parts.append("\n## RT Congestion by Region — On-Peak ($/MWh)")
+        headers = ["Date"] + [hub_shorts.get(h, h) + " OnPk" for h in hubs] + \
+                  [hub_shorts.get(h, h) + " Flat" for h in hubs]
+        rows = []
+        for d in daily:
+            row = [d["date"]]
+            for h in hubs:
+                short = hub_shorts.get(h, h)
+                row.append(_fmt2(d.get(f"{short}_rt_onpk")))
+            for h in hubs:
+                short = hub_shorts.get(h, h)
+                row.append(_fmt2(d.get(f"{short}_rt_flat")))
+            rows.append(row)
+        parts.append(_table(headers, rows))
+
+    # --- Section 3: Cross-hub congestion spreads (DA on-peak) ---
+    da_spread = vm.get("da_congestion_spread", [])
+    if da_spread:
+        parts.append("\n## DA Congestion Spreads — On-Peak ($/MWh)")
+        headers = ["Date", "East-West", "Dom-AEP", "East-Dom",
+                   "West OnPk", "AEP OnPk", "Dom OnPk", "East OnPk"]
+        rows = []
+        for d in da_spread:
+            rows.append([
+                d["date"],
+                _fmt2(d.get("east_west_onpk")),
+                _fmt2(d.get("dom_aep_onpk")),
+                _fmt2(d.get("east_dom_onpk")),
+                _fmt2(d.get("West_onpk")),
+                _fmt2(d.get("AEP_onpk")),
+                _fmt2(d.get("Dom_onpk")),
+                _fmt2(d.get("East_onpk")),
+            ])
+        parts.append(_table(headers, rows))
+
+    # --- Section 4: RT congestion spreads ---
+    rt_spread = vm.get("rt_congestion_spread", [])
+    if rt_spread:
+        parts.append("\n## RT Congestion Spreads — On-Peak ($/MWh)")
+        headers = ["Date", "East-West", "Dom-AEP", "East-Dom",
+                   "West OnPk", "AEP OnPk", "Dom OnPk", "East OnPk"]
+        rows = []
+        for d in rt_spread:
+            rows.append([
+                d["date"],
+                _fmt2(d.get("east_west_onpk")),
+                _fmt2(d.get("dom_aep_onpk")),
+                _fmt2(d.get("east_dom_onpk")),
+                _fmt2(d.get("West_onpk")),
+                _fmt2(d.get("AEP_onpk")),
+                _fmt2(d.get("Dom_onpk")),
+                _fmt2(d.get("East_onpk")),
+            ])
+        parts.append(_table(headers, rows))
+
+    # --- Section 5: Per-hub hourly congestion detail ---
+    profiles = vm.get("hub_profiles", [])
+    for profile in profiles:
+        hub = profile.get("hub", "?")
+        short = hub_shorts.get(hub, hub)
+
+        # DA hourly pivot
+        da_hourly = profile.get("da_hourly", [])
+        if da_hourly:
+            parts.append(f"\n## {short} — DA Congestion Hourly ($/MWh)")
+            h, r = _pivot_hourly(da_hourly, value_key="cong", decimals=2)
+            if r:
+                parts.append(_table(h, r))
+
+        # RT hourly pivot
+        rt_hourly = profile.get("rt_hourly", [])
+        if rt_hourly:
+            parts.append(f"\n## {short} — RT Congestion Hourly ($/MWh)")
+            h, r = _pivot_hourly(rt_hourly, value_key="cong", decimals=2)
+            if r:
+                parts.append(_table(h, r))
 
     return "\n".join(parts)

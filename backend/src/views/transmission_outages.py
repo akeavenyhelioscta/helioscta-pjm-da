@@ -12,6 +12,7 @@ Consumed by:
 """
 from __future__ import annotations
 
+import re
 from datetime import date
 
 import numpy as np
@@ -70,6 +71,45 @@ def _map_zone_to_region(zone: str) -> str:
     return zone  # unmapped zones keep their raw name
 
 
+# Equipment type → congestion-impact category
+_EQUIP_CATEGORY = {
+    "LINE": "path",      # removes a flow corridor between two substations
+    "XFMR": "capacity",  # removes local transformation capacity at a substation
+    "PS": "capacity",     # removes phase-shifting capability at a substation
+}
+
+
+def _parse_facility(facility: str, equip_type: str) -> dict:
+    """Parse facility name to extract route (lines) or station (equipment).
+
+    Lines have two endpoints (from/to) identifying the flow path affected.
+    Transformers and phase shifters reference a single substation.
+
+    Returns dict with keys: from_station, to_station, station.
+    """
+    result = {"from_station": None, "to_station": None, "station": None}
+    if not facility:
+        return result
+
+    # Extract the description after "{kV} KV"
+    match = re.search(r"\d+\s+KV\s+(.+)", facility)
+    if not match:
+        return result
+    desc = match.group(1).strip()
+
+    if equip_type == "LINE":
+        # Lines: description contains "FROM-TO" route (hyphen-separated)
+        parts = re.split(r"\s*-\s*", desc, maxsplit=1)
+        if len(parts) == 2:
+            result["from_station"] = re.sub(r"\s+", " ", parts[0]).strip()
+            result["to_station"] = re.sub(r"\s+", " ", parts[1]).strip()
+    else:
+        # XFMR, PS: first token in description is the substation name
+        result["station"] = desc.split()[0] if desc else None
+
+    return result
+
+
 def build_view_model(df: pd.DataFrame, reference_date: date | None = None) -> dict:
     """Build the transmission outages view model.
 
@@ -95,6 +135,7 @@ def build_view_model(df: pd.DataFrame, reference_date: date | None = None) -> di
     df["end_datetime"] = pd.to_datetime(df["end_datetime"], errors="coerce")
     df["last_revised"] = pd.to_datetime(df["last_revised"], errors="coerce")
     df["risk_flag"] = df["risk"].fillna("").str.strip().str.lower() == "yes"
+    df["equip_category"] = df["equipment_type"].map(_EQUIP_CATEGORY).fillna("other")
 
     # Split active vs cancelled
     df_active = df[df["outage_state"].isin(["Active", "Approved"])].copy()
@@ -129,6 +170,8 @@ def _build_regional_summary(df: pd.DataFrame) -> list[dict]:
         rows.append({
             "region": region,
             "total": len(rdf),
+            "path_count": int((rdf["equip_category"] == "path").sum()),
+            "capacity_count": int((rdf["equip_category"] == "capacity").sum()),
             "count_765kv": int((rdf["voltage_kv"] == 765).sum()),
             "count_500kv": int((rdf["voltage_kv"] == 500).sum()),
             "count_345kv": int((rdf["voltage_kv"] == 345).sum()),
@@ -146,6 +189,8 @@ def _build_regional_summary(df: pd.DataFrame) -> list[dict]:
             rows.append({
                 "region": region,
                 "total": len(rdf),
+                "path_count": int((rdf["equip_category"] == "path").sum()),
+                "capacity_count": int((rdf["equip_category"] == "capacity").sum()),
                 "count_765kv": int((rdf["voltage_kv"] == 765).sum()),
                 "count_500kv": int((rdf["voltage_kv"] == 500).sum()),
                 "count_345kv": int((rdf["voltage_kv"] == 345).sum()),
@@ -190,13 +235,20 @@ def _build_notable_outages(df: pd.DataFrame, reference_date: date) -> list[dict]
         cause_raw = row.get("cause", "") or ""
         cause_primary = cause_raw.split(";")[0].strip() if cause_raw else ""
 
+        equip_type = row.get("equipment_type", "")
+        parsed = _parse_facility(row.get("facility_name", ""), equip_type)
+
         notable_rows.append({
             "tags": tags,
             "region": row["region"],
             "zone": row["zone"],
             "facility": row.get("facility_name", ""),
-            "equip": row.get("equipment_type", ""),
+            "equip": equip_type,
+            "equip_category": _EQUIP_CATEGORY.get(equip_type, "other"),
             "kv": row["voltage_kv"],
+            "from_station": parsed["from_station"],
+            "to_station": parsed["to_station"],
+            "station": parsed["station"],
             "started": str(row["start_datetime"].date()) if row["start_datetime"] is not pd.NaT else None,
             "est_return": str(row["end_datetime"].date()) if row["end_datetime"] is not pd.NaT else None,
             "days_out": _si(row["days_out"]),
@@ -231,12 +283,19 @@ def _build_recently_cancelled(df: pd.DataFrame) -> list[dict]:
         cause_raw = row.get("cause", "") or ""
         cause_primary = cause_raw.split(";")[0].strip() if cause_raw else ""
 
+        equip_type = row.get("equipment_type", "")
+        parsed = _parse_facility(row.get("facility_name", ""), equip_type)
+
         rows.append({
             "region": row["region"],
             "zone": row["zone"],
             "facility": row.get("facility_name", ""),
-            "equip": row.get("equipment_type", ""),
+            "equip": equip_type,
+            "equip_category": _EQUIP_CATEGORY.get(equip_type, "other"),
             "kv": row["voltage_kv"],
+            "from_station": parsed["from_station"],
+            "to_station": parsed["to_station"],
+            "station": parsed["station"],
             "was_scheduled_start": str(row["start_datetime"].date()) if row["start_datetime"] is not pd.NaT else None,
             "was_scheduled_end": str(row["end_datetime"].date()) if row["end_datetime"] is not pd.NaT else None,
             "cancelled_date": str(row["last_revised"].date()) if row["last_revised"] is not pd.NaT else None,
