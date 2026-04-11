@@ -235,44 +235,47 @@ def run_strip(
         logger.warning(f"Load forecast pull failed: {e}")
 
     # ── 4. Per-day analog selection + forecast ──────────────────────
-    analog_kwargs = dict(
-        n_analogs=config.n_analogs,
-        feature_weights=config.resolved_weights(),
-        apply_calendar_filter=config.apply_calendar_filter,
-        apply_regime_filter=config.apply_regime_filter,
-        apply_outage_regime_filter=config.apply_outage_regime_filter,
-        outage_tolerance_std=config.outage_tolerance_std,
-        season_window_days=config.season_window_days,
-        same_dow_group=config.same_dow_group,
-        weight_method=config.weight_method,
-        adaptive_filter_enabled=config.adaptive_filter_enabled,
-        adaptive_extreme_threshold_std=config.adaptive_extreme_threshold_std,
-        adaptive_season_window_days=config.adaptive_season_window_days,
-        adaptive_same_dow_group=config.adaptive_same_dow_group,
-        adaptive_lmp_tolerance_std=config.adaptive_lmp_tolerance_std,
-        adaptive_gas_tolerance_std=config.adaptive_gas_tolerance_std,
-        adaptive_n_analogs=config.adaptive_n_analogs,
-        adaptive_weight_method=config.adaptive_weight_method,
-        adaptive_softmax_temperature=config.adaptive_softmax_temperature,
-    )
-
     strip_rows = []
     all_quantile_rows = []
     per_day = {}
     per_day_analogs: dict[str, pd.DataFrame] = {}
 
     for offset, target_date in enumerate(forecast_dates, start=1):
+        day_cfg, day_type = config.with_day_type_overrides(target_date)
+        analog_kwargs = dict(
+            n_analogs=day_cfg.n_analogs,
+            feature_weights=day_cfg.resolved_weights(),
+            apply_calendar_filter=day_cfg.apply_calendar_filter,
+            apply_regime_filter=day_cfg.apply_regime_filter,
+            apply_outage_regime_filter=day_cfg.apply_outage_regime_filter,
+            outage_tolerance_std=day_cfg.outage_tolerance_std,
+            season_window_days=day_cfg.season_window_days,
+            same_dow_group=day_cfg.same_dow_group,
+            weight_method=day_cfg.weight_method,
+            adaptive_filter_enabled=day_cfg.adaptive_filter_enabled,
+            adaptive_extreme_threshold_std=day_cfg.adaptive_extreme_threshold_std,
+            adaptive_season_window_days=day_cfg.adaptive_season_window_days,
+            adaptive_same_dow_group=day_cfg.adaptive_same_dow_group,
+            adaptive_lmp_tolerance_std=day_cfg.adaptive_lmp_tolerance_std,
+            adaptive_gas_tolerance_std=day_cfg.adaptive_gas_tolerance_std,
+            adaptive_n_analogs=day_cfg.adaptive_n_analogs,
+            adaptive_weight_method=day_cfg.adaptive_weight_method,
+            adaptive_softmax_temperature=day_cfg.adaptive_softmax_temperature,
+        )
         synthetic_ref_date = target_date - timedelta(days=1)
         renewable_blend_weight = config.renewable_blend_weight(offset=offset)
         logger.info(f"--- D+{offset}: {target_date} ({DAY_ABBR[target_date.weekday()]}) "
-                     f"| ref={synthetic_ref_date} ---")
+                     f"| ref={synthetic_ref_date} | profile={day_type} ---")
 
         # ── Find analogs for this day ───────────────────────────────
+        # Pass delivery_date=target_date so calendar filtering (DOW group,
+        # season window) uses the delivery day's characteristics.
         if synthetic_ref_date == ref_date:
             # D+1: today's row already exists — use standard find_analogs
             analogs_df = find_analogs(
                 target_date=ref_date,
                 df_features=df_features,
+                delivery_date=target_date,
                 **analog_kwargs,
             )
         else:
@@ -286,7 +289,7 @@ def run_strip(
                 df_pjm_wind_forecast=df_wind_multi,
                 df_meteo_solar_forecast=df_meteo_solar_multi,
                 df_meteo_wind_forecast=df_meteo_wind_multi,
-                renewable_mode=renewable_mode,
+                renewable_mode=day_cfg.resolved_renewable_mode(),
                 renewable_blend_weight_pjm=renewable_blend_weight,
                 df_outage_forecast=df_outage_multi,
                 df_load_forecast=df_load_forecast_multi,
@@ -307,6 +310,7 @@ def run_strip(
             analogs_df = find_analogs(
                 target_date=synthetic_ref_date,
                 df_features=df_augmented,
+                delivery_date=target_date,
                 **analog_kwargs,
             )
 
@@ -394,6 +398,7 @@ def run_strip(
             "has_actuals": has_actuals,
             "n_analogs_used": n_with_data,
             "offset": offset,
+            "day_type": day_type,
             "analogs": analogs_df,
         }
 

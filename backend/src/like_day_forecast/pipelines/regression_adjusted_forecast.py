@@ -67,20 +67,23 @@ class FundamentalDelta:
     adj_offpeak: float
 
 
-def run(
-    forecast_date: str | None = None,
+def compute_adjustment(
+    base: dict,
+    df_features: pd.DataFrame,
     sensitivities: dict[str, dict[str, float]] | None = None,
-    config: configs.ScenarioConfig | None = None,
-    **kwargs,
+    fundamental_overrides: dict | None = None,
 ) -> dict:
-    """Run the like-day forecast with regression adjustment for fundamental deltas.
+    """Compute regression adjustment using pre-computed base forecast and features.
+
+    This is the lightweight inner loop.  Call :func:`run` for the full
+    pipeline, or call this directly when reusing a cached base forecast
+    across scenarios.
 
     Args:
-        forecast_date: YYYY-MM-DD, defaults to tomorrow.
-        sensitivities: Override sensitivity coefficients. Keys match
-            DEFAULT_SENSITIVITIES; values are {"onpeak": x, "offpeak": y}.
-        config: Optional ScenarioConfig override.
-        **kwargs: Passed through to base forecast pipeline.
+        base: Result dict from ``forecast.run()`` (analogs, output_table, …).
+        df_features: Feature matrix from ``build_daily_features()``.
+        sensitivities: Override sensitivity coefficients.
+        fundamental_overrides: Override target-day fundamental values.
 
     Returns:
         Dict with base forecast output plus adjusted tables and delta details.
@@ -89,9 +92,6 @@ def run(
     if sensitivities:
         for k, v in sensitivities.items():
             sens[k] = {**sens.get(k, {}), **v}
-
-    # 1. Run base forecast (returns analogs, feature matrix via builder)
-    base = run_base_forecast(forecast_date=forecast_date, config=config, **kwargs)
 
     if "error" in base:
         return base
@@ -103,32 +103,49 @@ def run(
     reference_date_str = base["reference_date"]
     reference_date = pd.to_datetime(reference_date_str).date()
 
-    # 2. Rebuild feature matrix to access fundamental values
-    #    (the base forecast already built this — we rebuild from cache, which is fast)
-    from src.like_day_forecast.features.builder import build_daily_features
-
-    cache_kwargs = {k: v for k, v in kwargs.items()
-                    if k in ("cache_dir", "cache_enabled", "cache_ttl_hours", "force_refresh")}
-    cfg = config or configs.ScenarioConfig(forecast_date=forecast_date)
-
-    df_features = build_daily_features(
-        schema=cfg.schema,
-        hub=cfg.hub,
-        renewable_mode=cfg.resolved_renewable_mode(),
-        renewable_region=cfg.renewable_forecast_region,
-        renewable_blend_pjm_weight=cfg.renewable_blend_weight(offset=1),
-        **cache_kwargs,
-    )
-
-    # 3. Extract reference date's fundamentals
     ref_mask = df_features["date"] == reference_date
     if not ref_mask.any():
         logger.warning(f"Reference date {reference_date} not in feature matrix")
         return {**base, "adjustment": None, "deltas": []}
 
-    ref_row = df_features[ref_mask].iloc[0]
+    ref_row = df_features[ref_mask].iloc[0].copy()
 
-    # 4. Extract analog dates' fundamentals and compute weighted average
+    # Apply fundamental overrides (Mode 2 scenario injection)
+    applied_overrides = {}
+    if fundamental_overrides:
+        from src.like_day_forecast.pipelines.scenarios import FUNDAMENTAL_COLUMN_MAP
+
+        for fund_key, override_val in fundamental_overrides.items():
+            col = FUNDAMENTAL_COLUMN_MAP.get(fund_key)
+            if col is None:
+                logger.warning(f"Unknown fundamental override key: {fund_key}")
+                continue
+            if col not in ref_row.index:
+                logger.warning(f"Column {col} not in feature matrix for override {fund_key}")
+                continue
+
+            original_val = float(ref_row[col]) if pd.notna(ref_row[col]) else None
+            if isinstance(override_val, dict) and "pct_change" in override_val:
+                if original_val is not None:
+                    new_val = original_val * (1.0 + override_val["pct_change"])
+                else:
+                    logger.warning(f"Cannot apply pct_change to NaN column {col}")
+                    continue
+            else:
+                new_val = float(override_val)
+
+            ref_row[col] = new_val
+            applied_overrides[fund_key] = {
+                "column": col,
+                "original": original_val,
+                "override": new_val,
+            }
+            logger.info(
+                f"  Fundamental override: {fund_key} ({col}): "
+                f"{original_val:,.0f} -> {new_val:,.0f}"
+            )
+
+    # Extract analog dates' fundamentals and compute weighted average
     analog_dates = analogs_df["date"].tolist()
     analog_weights = analogs_df["weight"].values
     analog_mask = df_features["date"].isin(analog_dates)
@@ -149,7 +166,7 @@ def run(
             return np.nan
         return float(np.average(vals[mask], weights=w[mask]))
 
-    # 5. Compute deltas for each fundamental
+    # Compute deltas for each fundamental
     deltas: list[FundamentalDelta] = []
 
     def _safe(val):
@@ -242,7 +259,7 @@ def run(
                 adj_offpeak=delta * s["offpeak"],
             ))
 
-    # 6. Sum adjustments
+    # Sum adjustments
     total_adj_onpeak = sum(d.adj_onpeak for d in deltas)
     total_adj_offpeak = sum(d.adj_offpeak for d in deltas)
 
@@ -252,7 +269,7 @@ def run(
         logger.info(f"  {d.label}: {d.delta:+,.0f} {d.unit} → "
                      f"on-peak {d.adj_onpeak:+.2f}, off-peak {d.adj_offpeak:+.2f}")
 
-    # 7. Apply adjustment to hourly forecast
+    # Apply adjustment to hourly forecast
     hour_deltas = {}
     for h in range(1, 25):
         hour_deltas[h] = total_adj_onpeak if h in ONPEAK_HOURS else total_adj_offpeak
@@ -327,7 +344,70 @@ def run(
             "n_factors": len(deltas),
             "sensitivities": sens,
         },
+        "fundamental_overrides_applied": applied_overrides,
     }
+
+
+def build_features(
+    config: configs.ScenarioConfig | None = None,
+    forecast_date: str | None = None,
+    **kwargs,
+) -> pd.DataFrame:
+    """Build the daily feature matrix (cached).
+
+    Exposed so callers (e.g. scenario_forecast) can build once and reuse.
+    """
+    from src.like_day_forecast.features.builder import build_daily_features
+
+    cache_kwargs = {k: v for k, v in kwargs.items()
+                    if k in ("cache_dir", "cache_enabled", "cache_ttl_hours", "force_refresh")}
+    cfg = config or configs.ScenarioConfig(forecast_date=forecast_date)
+
+    return build_daily_features(
+        schema=cfg.schema,
+        hub=cfg.hub,
+        renewable_mode=cfg.resolved_renewable_mode(),
+        renewable_region=cfg.renewable_forecast_region,
+        renewable_blend_pjm_weight=cfg.renewable_blend_weight(offset=1),
+        **cache_kwargs,
+    )
+
+
+def run(
+    forecast_date: str | None = None,
+    sensitivities: dict[str, dict[str, float]] | None = None,
+    config: configs.ScenarioConfig | None = None,
+    fundamental_overrides: dict | None = None,
+    **kwargs,
+) -> dict:
+    """Run the like-day forecast with regression adjustment for fundamental deltas.
+
+    Args:
+        forecast_date: YYYY-MM-DD, defaults to tomorrow.
+        sensitivities: Override sensitivity coefficients. Keys match
+            DEFAULT_SENSITIVITIES; values are {"onpeak": x, "offpeak": y}.
+        config: Optional ScenarioConfig override.
+        fundamental_overrides: Override target-day fundamental values before
+            delta computation.  Keys match FUNDAMENTAL_COLUMN_MAP in
+            ``scenarios.py``; values are either a float (absolute override) or
+            a dict ``{"pct_change": float}`` for percentage adjustment.
+        **kwargs: Passed through to base forecast pipeline.
+
+    Returns:
+        Dict with base forecast output plus adjusted tables and delta details.
+    """
+    base = run_base_forecast(forecast_date=forecast_date, config=config, **kwargs)
+    if "error" in base:
+        return base
+
+    df_features = build_features(config=config, forecast_date=forecast_date, **kwargs)
+
+    return compute_adjustment(
+        base=base,
+        df_features=df_features,
+        sensitivities=sensitivities,
+        fundamental_overrides=fundamental_overrides,
+    )
 
 
 def main():

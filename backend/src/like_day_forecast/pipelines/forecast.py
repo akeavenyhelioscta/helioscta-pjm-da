@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 ONPEAK_HOURS = list(range(8, 24))
 OFFPEAK_HOURS = list(range(1, 8)) + [24]
+DAY_ABBR = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
 
 
 def weighted_quantile(values: np.ndarray, weights: np.ndarray, q: float) -> float:
@@ -94,11 +95,13 @@ def run(
         target_date = date.today() + timedelta(days=1)
     else:
         target_date = pd.to_datetime(config.forecast_date).date()
+    config, day_type = config.with_day_type_overrides(target_date)
     reference_date = target_date - timedelta(days=1)
 
     logger.info("=" * 60)
     logger.info(f"Like-Day Forecast: DA LMP for {target_date} — {config.hub}")
     logger.info(f"Reference date (analog matching): {reference_date}")
+    logger.info(f"Day-type profile: {day_type}")
     logger.info(f"Config: n_analogs={config.n_analogs} weight_method={config.weight_method} "
                 f"season_window={config.season_window_days} dow_filter={config.same_dow_group}")
     logger.info("=" * 60)
@@ -138,6 +141,16 @@ def run(
 
     # 2. Find analog days for the reference date
     logger.info(f"Finding {config.n_analogs} analogs for {reference_date}...")
+    # Parse exclude_dates strings to date objects
+    parsed_exclude_dates = []
+    for d in config.exclude_dates:
+        parsed_exclude_dates.append(pd.to_datetime(d).date())
+
+    # NOTE: reference_date is D-1 (e.g. Friday for Saturday delivery).
+    # We pass delivery_date=target_date so that calendar filtering (DOW
+    # group matching and season-window centering) uses the delivery day's
+    # characteristics — ensuring Saturday forecasts match Saturday analogs,
+    # not Friday analogs.
     analogs_df = find_analogs(
         target_date=reference_date,
         df_features=df_features,
@@ -159,6 +172,9 @@ def run(
         adaptive_n_analogs=config.adaptive_n_analogs,
         adaptive_weight_method=config.adaptive_weight_method,
         adaptive_softmax_temperature=config.adaptive_softmax_temperature,
+        exclude_holidays=config.exclude_holidays,
+        exclude_dates=parsed_exclude_dates,
+        delivery_date=target_date,
     )
 
     # 3. Pull raw hourly DA LMP data (cache hit if builder already cached it)
@@ -278,6 +294,7 @@ def run(
         "metrics": metrics,
         "forecast_date": str(target_date),
         "reference_date": str(reference_date),
+        "day_type": day_type,
         "has_actuals": has_actuals,
         "n_analogs_used": n_with_data,
         "df_forecast": df_forecast,
@@ -320,13 +337,18 @@ def _build_output_table(
 
 def _print_analogs(analogs_df: pd.DataFrame, target_date: date, reference_date: date) -> None:
     """Print the top analog days table."""
+    target_dow = DAY_ABBR[target_date.weekday()]
+    ref_dow = DAY_ABBR[reference_date.weekday()]
     print("\n" + "=" * 90)
     print(f"  LIKE-DAY ANALOG DAYS")
-    print(f"  Forecast: {target_date} (Thu)  |  Reference: {reference_date}  |  Hub: Western Hub")
+    print(
+        f"  Forecast: {target_date} ({target_dow})  |  "
+        f"Reference: {reference_date} ({ref_dow})  |  Hub: Western Hub"
+    )
     print("=" * 90)
 
     display = analogs_df.head(configs.DEFAULT_N_DISPLAY).copy()
-    display["date"] = display["date"].astype(str)
+    display["date"] = pd.to_datetime(display["date"]).dt.strftime("%a %b-%d %Y")
     display["distance"] = display["distance"].map("{:.4f}".format)
     display["similarity"] = display["similarity"].map("{:.2%}".format)
     display["weight"] = display["weight"].map("{:.4f}".format)

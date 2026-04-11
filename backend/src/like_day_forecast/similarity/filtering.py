@@ -69,14 +69,20 @@ def calendar_filter(
     target_date: date,
     same_dow_group: bool = configs.FILTER_SAME_DOW_GROUP,
     season_window_days: int = configs.FILTER_SEASON_WINDOW_DAYS,
+    delivery_date: date | None = None,
 ) -> pd.DataFrame:
     """Pre-filter historical dates by calendar proximity.
 
     Args:
         df: Daily feature DataFrame (must include 'date', 'dow_group').
-        target_date: The target forecast date.
+        target_date: The reference date used for analog matching.
         same_dow_group: If True, only match within the same DOW group.
         season_window_days: +/- days from target's day-of-year.
+        delivery_date: The actual delivery date being forecast. When provided,
+            DOW-group matching and season-window centering use this date
+            instead of *target_date*, so that (e.g.) a Saturday delivery
+            forecast matches Saturday analogs even though the reference
+            row is Friday.  If ``None``, falls back to *target_date*.
 
     Returns:
         Filtered DataFrame.
@@ -89,27 +95,40 @@ def calendar_filter(
     # Exclude future dates
     filtered = filtered[filtered["date"] < target_date]
 
-    # DOW group filter
-    if same_dow_group and "dow_group" in filtered.columns:
-        target_row = df[df["date"] == target_date]
-        if len(target_row) > 0:
-            target_dow_group = target_row["dow_group"].iloc[0]
-            filtered = filtered[filtered["dow_group"] == target_dow_group]
+    # The date whose calendar characteristics we want to match: use the
+    # delivery date when available so weekend/holiday forecasts pull the
+    # correct DOW group from the analog pool.
+    match_date = delivery_date or target_date
 
-    # Seasonal proximity: +/- N days from target's day-of-year
+    # DOW group filter — match the *delivery* day's DOW group
+    if same_dow_group and "dow_group" in filtered.columns:
+        # Look up the dow_group for the match_date.  It may not be in the
+        # feature matrix (e.g. synthetic future date), so fall back to
+        # computing it directly from the weekday number.
+        match_row = df[df["date"] == match_date]
+        if len(match_row) > 0:
+            match_dow_group = match_row["dow_group"].iloc[0]
+        else:
+            # Compute from weekday: 0-4 → weekday (group 0), 5 → saturday (1), 6 → sunday (2)
+            wd = match_date.weekday()
+            match_dow_group = 0 if wd < 5 else (1 if wd == 5 else 2)
+        filtered = filtered[filtered["dow_group"] == match_dow_group]
+
+    # Seasonal proximity: centre the window on the *delivery* date
     if season_window_days > 0:
-        target_doy = pd.Timestamp(target_date).dayofyear
+        center_doy = pd.Timestamp(match_date).dayofyear
         candidate_doy = pd.to_datetime(filtered["date"]).dt.dayofyear
 
         # Handle wrap-around (e.g., target DOY 10, window 30 should include DOY 345-365 + 1-40)
-        diff = np.abs(candidate_doy - target_doy)
+        diff = np.abs(candidate_doy - center_doy)
         diff = np.minimum(diff, 365 - diff)
         filtered = filtered[diff <= season_window_days]
 
     before = len(df)
     after = len(filtered)
     logger.info(f"Calendar filter: {before:,} -> {after:,} candidates "
-                f"(DOW group={same_dow_group}, season_window={season_window_days}d)")
+                f"(DOW group={same_dow_group}, season_window={season_window_days}d, "
+                f"match_date={match_date})")
 
     return filtered
 

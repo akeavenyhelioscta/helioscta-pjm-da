@@ -312,6 +312,9 @@ def find_analogs(
     adaptive_n_analogs: int = configs.ADAPTIVE_N_ANALOGS,
     adaptive_weight_method: str = configs.ADAPTIVE_WEIGHT_METHOD,
     adaptive_softmax_temperature: float = configs.ADAPTIVE_SOFTMAX_TEMPERATURE,
+    exclude_holidays: bool = True,
+    exclude_dates: list[date] | None = None,
+    delivery_date: date | None = None,
 ) -> pd.DataFrame:
     """Find the N most similar historical dates to the target.
 
@@ -367,11 +370,33 @@ def find_analogs(
     # --- 1. Pre-filter ---
     pool = df_features.copy()
 
+    # Exclude manually specified dates
+    if exclude_dates:
+        before = len(pool)
+        pool = pool[~pool["date"].isin(exclude_dates)]
+        n_excluded = before - len(pool)
+        if n_excluded:
+            logger.info(f"Excluded {n_excluded} manually specified date(s) from analog pool")
+
+    # Exclude NERC holidays when the target is not a holiday
+    if exclude_holidays and "is_nerc_holiday" in pool.columns:
+        target_row = df_features[df_features["date"] == target_date]
+        target_is_holiday = (
+            target_row["is_nerc_holiday"].iloc[0] if len(target_row) > 0 else 0
+        )
+        if not target_is_holiday:
+            before = len(pool)
+            pool = pool[pool["is_nerc_holiday"] != 1]
+            n_excluded = before - len(pool)
+            if n_excluded:
+                logger.info(f"Excluded {n_excluded} NERC holiday(s) from analog pool")
+
     if apply_calendar_filter:
         pool = filtering.calendar_filter(
             pool, target_date,
             same_dow_group=same_dow_group,
             season_window_days=season_window_days,
+            delivery_date=delivery_date,
         )
 
     if apply_regime_filter:
