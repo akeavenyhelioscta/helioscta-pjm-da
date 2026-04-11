@@ -45,6 +45,9 @@ wandb/
 backend/cache/
 **/like_day_forecast/cache/
 
+# LASSO QR model artifacts
+backend/src/lasso_quantile_regression/models/*.joblib
+
 # misc files
 .archive/*
 .test/*
