@@ -14,7 +14,7 @@ import pandas as pd
 from src.like_day_forecast import configs
 from src.data import solar_forecast_vintages
 from src.utils.cache_utils import pull_with_cache
-from src.reporting.fragments.forecast_chart_utils import (
+from src.reporting.fragments.like_day_forecast_chart_utils import (
     REGIONS, REGION_LABELS, VINTAGE_ORDER,
     vintage_order, empty,
     build_vintage_badges, build_vintage_chart, build_diff_chart,

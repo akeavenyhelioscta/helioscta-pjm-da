@@ -2,6 +2,19 @@
     "python.defaultInterpreterPath": "C:/Users/AidanKeaveny/miniconda3/envs/helioscta-pjm-da/python.exe",
     "python.terminal.activateEnvironment": true,
     "terminal.integrated.defaultProfile.windows": "Git Bash",
+
+    // Color Customizations — active window gets #0f3460, inactive falls back to theme
+    "workbench.colorCustomizations": {
+        "titleBar.activeBackground": "#0f3460",
+        "titleBar.activeForeground": "#e0e0e0",
+        "activityBar.background": "#0f3460",
+        "activityBar.foreground": "#e0e0e0",
+        "sideBar.background": "#0f3460",
+        "sideBar.foreground": "#e0e0e0",
+        "sideBarTitle.foreground": "#e0e0e0",
+        "activityBarBadge.background": "#e94560"
+    },
+
     "sqltools.connections": [
         {
             "ssh": "Disabled",

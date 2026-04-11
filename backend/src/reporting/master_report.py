@@ -13,14 +13,15 @@ from zoneinfo import ZoneInfo
 # Add new entries here when new fragments are registered.
 
 REPORT_GROUPS: dict[str, tuple[str, str]] = {
-    "forecast_results": ("DA Model", "Like Day Model"),
-    "market_adjusted_forecast": ("DA Model", "Market Adjusted"),
-    "regression_adjusted_forecast": ("DA Model", "Regression Adjusted"),
+    "like_day_forecast_results": ("DA Model", "Like Day Model"),
+    "like_day_forecast_market_adjusted": ("DA Model", "Market Adjusted"),
+    "like_day_forecast_regression_adjusted": ("DA Model", "Regression Adjusted"),
     "meteologica_da_price_forecast": ("DA Model", "Meteologica DA Price"),
-    "strip_forecast": ("DA Model", "Strip Forecast"),
+    "like_day_forecast_strip": ("DA Model", "Strip Forecast"),
     "balday": ("RT BalDay", "Bal Day"),
     "rt_load_metered_rto": ("Input Validation", "RT Load Metered RTO"),
     "load_forecast_vintage_combined": ("Load Forecasts", "Load Forecast Vintages"),
+    "pjm_rto_forecast_snapshot": ("Load Forecasts", "PJM RTO Snapshot"),
     "net_load_forecast_vintage_combined": ("Load Forecasts", "Net Load Forecast Vintages"),
     "solar_forecast_vintage_combined": ("Renewable Forecasts", "Solar Forecast Vintages"),
     "wind_forecast_vintage_combined": ("Renewable Forecasts", "Wind Forecast Vintages"),

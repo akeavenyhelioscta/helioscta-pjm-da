@@ -22,8 +22,8 @@ Section = tuple[str, Any, str | None]
 
 _OUTAGE_TYPES = [
     ("Total Outages", "total_outages_mw"),
-    ("Forced Outages", "forced_outages_mw"),
     ("Planned Outages", "planned_outages_mw"),
+    ("Forced Outages", "forced_outages_mw"),
     ("Maint Outages", "maintenance_outages_mw"),
 ]
 
@@ -120,24 +120,29 @@ def _heatmap_color(value: float, vmin: float, vmax: float) -> str:
     """Map value to green (high) → red (low) background color.
 
     Green = high outages, Red = low outages (matching PDF convention).
+    Uses pastel tones on a white table for clean contrast.
     """
     if pd.isna(value) or vmax == vmin:
-        return "transparent"
+        return "#ffffff"
 
     # Normalize 0 (low/red) to 1 (high/green)
     t = (value - vmin) / (vmax - vmin)
 
-    # Red (low) → Yellow (mid) → Green (high)
+    # Red (low) → Yellow (mid) → Green (high) — pastel/muted for white bg
     if t < 0.5:
-        # Red to Yellow
+        # Soft red to soft yellow
         ratio = t / 0.5
-        r, g, b = 200, int(60 + 140 * ratio), 60
+        r = int(248 - 8 * ratio)
+        g = int(180 + 52 * ratio)
+        b = int(180 - 30 * ratio)
     else:
-        # Yellow to Green
+        # Soft yellow to soft green
         ratio = (t - 0.5) / 0.5
-        r, g, b = int(200 - 140 * ratio), 200, int(60 + 40 * ratio)
+        r = int(240 - 82 * ratio)
+        g = int(232 - 14 * ratio)
+        b = int(150 + 30 * ratio)
 
-    return f"rgba({r}, {g}, {b}, 0.55)"
+    return f"rgb({r}, {g}, {b})"
 
 
 def _render_heatmap_table(
@@ -218,6 +223,9 @@ _STYLE = """
 .oh-wrap {
     overflow-x: auto;
     padding: 0 12px 16px;
+    background: #ffffff;
+    border-radius: 6px;
+    border: 1px solid #d0d7de;
 }
 .oh-table {
     border-collapse: collapse;
@@ -231,32 +239,32 @@ _STYLE = """
     white-space: nowrap;
 }
 .oh-hdr {
-    background: #141e30;
-    color: #8db4e0;
+    background: #f6f8fa;
+    color: #24292f;
     font-weight: 600;
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.4px;
-    border-bottom: 2px solid #2a3f60;
+    border-bottom: 2px solid #d0d7de;
     position: sticky;
     top: 0;
     z-index: 2;
 }
 .oh-sub-hdr {
     text-align: center;
-    color: #6f8db1;
+    color: #656d76;
     font-size: 11px;
     font-weight: 600;
-    background: #0e1520;
-    border-bottom: 1px solid #1a2a42;
+    background: #f6f8fa;
+    border-bottom: 1px solid #d0d7de;
     padding: 4px 0;
 }
 .oh-dt {
     text-align: left;
-    color: #9eb4d3;
+    color: #24292f;
     font-weight: 500;
     font-size: 12px;
-    background: #0e1520;
+    background: #f6f8fa;
 }
 .oh-sticky-col {
     position: sticky;
@@ -265,28 +273,28 @@ _STYLE = """
 }
 .oh-label {
     text-align: left;
-    color: #7a94b5;
+    color: #656d76;
     font-size: 12px;
     font-style: italic;
 }
 .oh-cell {
-    color: #e0e0e0;
+    color: #24292f;
     font-variant-numeric: tabular-nums;
     font-size: 12px;
     font-weight: 500;
-    border-radius: 2px;
 }
 .oh-empty {
-    color: #4a5568;
+    color: #c0c0c0;
+    background: #ffffff;
 }
 .oh-table tbody tr {
-    border-bottom: 1px solid #1a2a42;
+    border-bottom: 1px solid #e0e4e8;
 }
 .oh-table tbody tr:hover {
-    outline: 1px solid #4a6a8f;
+    outline: 1px solid #a0b0c0;
 }
 .oh-table tbody tr:hover .oh-dt {
-    background: #1a2640;
+    background: #eaeef2;
 }
 </style>
 """

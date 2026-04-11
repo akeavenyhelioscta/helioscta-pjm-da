@@ -1,8 +1,9 @@
 """Forecast results report — tomorrow's DA LMP prediction with actuals comparison.
 
 Sections:
-  1. Quantile Bands  — Pivoted band table with editable Override + Ovr-Fcst diff
-  2. Quantile Band Chart — Plotly chart with bands, median, forecast, override, actuals
+  1. Analog Days    — Table of analog days with rank, distance, similarity, weight
+  2. Quantile Bands  — Pivoted band table with editable Override + Ovr-Fcst diff
+  3. Quantile Band Chart — Plotly chart with bands, median, forecast, override, actuals
 """
 import logging
 from pathlib import Path
@@ -59,17 +60,27 @@ def build_fragments(
     df_forecast = result["df_forecast"]
     has_actuals = result["has_actuals"]
     forecast_date = result["forecast_date"]
+    reference_date = result["reference_date"]
+    analogs_df = result.get("analogs")
 
     sections: list[Section] = []
 
-    # 1. Quantile bands table (with editable Override + Ovr-Fcst diff)
+    # 1. Analog days table
+    if analogs_df is not None and len(analogs_df) > 0:
+        sections.append((
+            f"Analog Days — {forecast_date}",
+            _analog_days_table_html(analogs_df, forecast_date, reference_date),
+            None,
+        ))
+
+    # 2. Quantile bands table (with editable Override + Ovr-Fcst diff)
     sections.append((
         f"Quantile Bands — {forecast_date}",
         _quartile_bands_table_html(quantiles_table, output_table, has_actuals),
         None,
     ))
 
-    # 2. Quantile bands plot (with Override trace)
+    # 3. Quantile bands plot (with Override trace)
     sections.append((
         "Quantile Band Chart",
         _quartile_bands_plot_html(df_forecast, output_table, has_actuals),
@@ -79,7 +90,106 @@ def build_fragments(
     return sections
 
 
-# ── Section 1: Quartile Bands Table ───────────────────────────────────
+# ── Section 1: Analog Days Table ──────────────────────────────────────
+
+
+def _analog_days_table_html(
+    analogs_df: pd.DataFrame,
+    forecast_date: str,
+    reference_date: str,
+) -> str:
+    """Table of analog days with rank, date, distance, similarity, and weight."""
+    n_total = len(analogs_df)
+    top5_weight = analogs_df.head(5)["weight"].sum()
+    dist_min = analogs_df["distance"].min()
+    dist_max = analogs_df["distance"].max()
+
+    # Summary cards
+    html = '<div style="padding:12px 8px 4px 8px;">'
+    html += (
+        '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px;">'
+    )
+
+    card = (
+        "background:#111d31;border:1px solid #253b59;border-radius:10px;"
+        "padding:12px 16px;min-width:140px;flex:1;"
+    )
+    label_s = (
+        "font-size:10px;font-weight:600;color:#6f8db1;"
+        "text-transform:uppercase;letter-spacing:0.5px;"
+    )
+    val_s = (
+        "font-size:18px;font-weight:700;color:#dbe7ff;"
+        "font-family:'Space Grotesk',monospace;margin-top:2px;"
+    )
+
+    cards = [
+        ("Forecast Date", str(forecast_date)),
+        ("Reference Date", str(reference_date)),
+        ("Analogs Used", str(n_total)),
+        ("Top-5 Weight", f"{top5_weight:.1%}"),
+        ("Distance Range", f"{dist_min:.4f} — {dist_max:.4f}"),
+    ]
+    for lbl, val in cards:
+        html += (
+            f'<div style="{card}">'
+            f'<div style="{label_s}">{lbl}</div>'
+            f'<div style="{val_s}">{val}</div>'
+            f'</div>'
+        )
+    html += '</div>'  # close cards row
+
+    # Table
+    columns = ["Rank", "Date", "Distance", "Similarity", "Weight"]
+    html += (
+        '<table style="width:100%;border-collapse:collapse;'
+        'font-size:12px;font-family:monospace;">'
+    )
+
+    # Header
+    html += "<thead><tr>"
+    for col in columns:
+        align = "left" if col in ("Date",) else "right"
+        html += (
+            f'<th style="padding:6px 10px;background:#16263d;color:#e6efff;'
+            f'text-align:{align};font-size:11px;position:sticky;top:0;">{col}</th>'
+        )
+    html += "</tr></thead><tbody>"
+
+    # Rows
+    for i, (_, row) in enumerate(analogs_df.iterrows()):
+        bg = "rgba(22, 38, 61, 0.5)" if i % 2 == 0 else "transparent"
+        rank = int(row["rank"])
+        dt = str(row["date"])
+        dist = row["distance"]
+        sim = row["similarity"]
+        wt = row["weight"]
+
+        # Weight bar — visual indicator proportional to max weight
+        max_weight = analogs_df["weight"].max()
+        bar_pct = (wt / max_weight * 100) if max_weight > 0 else 0
+
+        html += f'<tr style="background:{bg};">'
+        html += f'<td style="padding:5px 10px;border-bottom:1px solid #1e3350;text-align:right;color:#a6bad6;">{rank}</td>'
+        html += f'<td style="padding:5px 10px;border-bottom:1px solid #1e3350;text-align:left;color:#dbe7ff;font-weight:600;">{dt}</td>'
+        html += f'<td style="padding:5px 10px;border-bottom:1px solid #1e3350;text-align:right;color:#dbe7ff;">{dist:.4f}</td>'
+        html += f'<td style="padding:5px 10px;border-bottom:1px solid #1e3350;text-align:right;color:#dbe7ff;">{sim:.2%}</td>'
+        html += (
+            f'<td style="padding:5px 10px;border-bottom:1px solid #1e3350;text-align:right;">'
+            f'<div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;">'
+            f'<div style="width:60px;height:6px;background:#1a2d48;border-radius:3px;overflow:hidden;">'
+            f'<div style="width:{bar_pct:.0f}%;height:100%;background:#4cc9f0;border-radius:3px;"></div>'
+            f'</div>'
+            f'<span style="color:#dbe7ff;">{wt:.4f}</span>'
+            f'</div></td>'
+        )
+        html += "</tr>"
+
+    html += "</tbody></table></div>"
+    return html
+
+
+# ── Section 2: Quartile Bands Table ───────────────────────────────────
 
 
 def _quartile_bands_table_html(
