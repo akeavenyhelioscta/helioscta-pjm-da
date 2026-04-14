@@ -23,6 +23,7 @@ from src.data import (
     gas_prices_hourly,
     solar_forecast_vintages,
     wind_forecast_vintages,
+    ice_power_intraday,
 )
 from src.like_day_forecast.features import (
     lmp_features,
@@ -41,6 +42,7 @@ from src.like_day_forecast.features import (
     nuclear_features,
     congestion_features,
     fuel_mix_shares_features,
+    ice_features,
 )
 
 logger = logging.getLogger(__name__)
@@ -187,6 +189,7 @@ def build_daily_features(
     renewable_mode: str = configs.RENEWABLE_FORECAST_MODE,
     renewable_region: str = configs.RENEWABLE_FORECAST_REGION,
     renewable_blend_pjm_weight: float = configs.RENEWABLE_BLEND_PJM_WEIGHT_D1,
+    include_ice_forward: bool = False,
     cache_dir: Path | None = configs.CACHE_DIR,
     cache_enabled: bool = configs.CACHE_ENABLED,
     cache_ttl_hours: float = configs.CACHE_TTL_HOURS,
@@ -502,6 +505,27 @@ def build_daily_features(
     result = result.merge(df_feat_congestion, on="date", how="left")
     result = result.merge(df_feat_fuel_mix_shares, on="date", how="left")
     result = result.merge(df_feat_net_load, on="date", how="left")
+
+    # --- 3b. ICE forward price features (optional) ---
+    if include_ice_forward:
+        logger.info("Pulling ICE power settlements for forward price features...")
+        try:
+            ice_cache_kwargs = {k: v for k, v in cache_kwargs.items() if k != "ttl_hours"}
+            df_ice_settles = pull_with_cache(
+                source_name="ice_power_settles_history",
+                pull_fn=ice_power_intraday.pull_settles,
+                pull_kwargs={"lookback_days": 1500},
+                ttl_hours=0.083,
+                **ice_cache_kwargs,
+            )
+            df_feat_ice = ice_features.build(df_ice_settles)
+            if len(df_feat_ice) > 0:
+                result = result.merge(df_feat_ice, on="date", how="left")
+                logger.info("Merged ICE features: %d days", len(df_feat_ice))
+            else:
+                logger.warning("No ICE features built — columns will be absent")
+        except Exception as e:
+            logger.warning("Could not pull ICE settlements for features: %s", e)
 
     # --- 4. Filter date range ---
     start_date = pd.to_datetime(configs.EXTENDED_FEATURE_START).date()
