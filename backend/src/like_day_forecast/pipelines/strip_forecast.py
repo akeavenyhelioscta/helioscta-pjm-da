@@ -34,6 +34,7 @@ from src.data import (
 from src.like_day_forecast.pipelines.forecast import (
     weighted_quantile,
     _add_summary_cols,
+    _quantile_label,
     ONPEAK_HOURS,
     OFFPEAK_HOURS,
 )
@@ -386,7 +387,7 @@ def run_strip(
         for q_val in config.quantiles:
             col = f"q_{q_val:.2f}"
             if col in df_forecast.columns:
-                q_row = {"Date": target_date, "Type": f"P{int(q_val * 100):02d}"}
+                q_row = {"Date": target_date, "Type": _quantile_label(q_val)}
                 q_hourly = dict(zip(df_forecast["hour_ending"].astype(int), df_forecast[col]))
                 for h in range(1, 25):
                     q_row[f"HE{h}"] = q_hourly.get(h)

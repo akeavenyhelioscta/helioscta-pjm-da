@@ -196,6 +196,8 @@ def _quartile_bands_table_html(
     quantiles_table: pd.DataFrame,
     output_table: pd.DataFrame,
     has_actuals: bool,
+    prefix: str = "qb",
+    plot_id: str = "qb-plot",
 ) -> str:
     """Pivoted quantile bands table: Date | Band | HE1-24 | OnPk | OffPk | Flat.
 
@@ -239,7 +241,7 @@ def _quartile_bands_table_html(
     }
 
     ncols = len(cols)
-    tid = "qb"  # table id for JS targeting
+    tid = prefix  # table id for JS targeting
 
     html = '<div style="overflow-x:auto;padding:8px;">'
 
@@ -313,11 +315,11 @@ def _quartile_bands_table_html(
             if band == "Override":
                 if is_hourly:
                     h = int(col[2:])
-                    attrs = f' data-row="qb-override" data-hour="{h}"'
+                    attrs = f' data-row="{tid}-override" data-hour="{h}"'
                     if pd.notna(val):
                         attrs += f' data-original="{val:.1f}" contenteditable="true"'
                 elif col in SUMMARY_COLS:
-                    attrs = f' data-row="qb-override" data-col="{col}"'
+                    attrs = f' data-row="{tid}-override" data-col="{col}"'
 
             if is_editable:
                 style += "border-bottom-style:dashed;border-bottom-color:#00CC96;cursor:text;"
@@ -376,7 +378,7 @@ def _quartile_bands_table_html(
 
     # ── Fcst − Ovr (own section) ──────────────────────────────────
     fcst_ovr_vals: dict[str, float | None] = {c: 0.0 for c in HE_COLS + SUMMARY_COLS}
-    html += _diff_row("Fcst\u2013Ovr", "qb-diff-fo", fcst_ovr_vals)
+    html += _diff_row("Fcst\u2013Ovr", f"{tid}-diff-fo", fcst_ovr_vals)
 
     # ── Actuals diffs (Fcst−Act, Ovr−Act) ─────────────────────────
     if has_actuals:
@@ -388,8 +390,8 @@ def _quartile_bands_table_html(
             fa_vals[c] = (fv - av) if (pd.notna(fv) and pd.notna(av)) else None
 
         html += divider
-        html += _diff_row("Fcst\u2013Act", "qb-diff-fa", fa_vals)
-        html += _diff_row("Ovr\u2013Act", "qb-diff-oa", dict(fa_vals))
+        html += _diff_row("Fcst\u2013Act", f"{tid}-diff-fa", fa_vals)
+        html += _diff_row("Ovr\u2013Act", f"{tid}-diff-oa", dict(fa_vals))
 
     html += "</tbody></table></div>"
 
@@ -405,11 +407,16 @@ def _quartile_bands_table_html(
         actual_js_lines = "  var act = null;\n"
 
     # ── JS: Override editing, diff rows, reset button, plot update ──
-    html += """
+    # Build JS with placeholder IDs, then substitute tid/plot_id
+    fcst_js = "".join(
+        f"  fcst[{int(c[2:])}] = {forecast_vals[c]:.4f};\n"
+        for c in HE_COLS if pd.notna(forecast_vals[c])
+    )
+    js_block = """
 <script>
 (function() {
-  var qbT = document.getElementById('qb');
-  var resetBtn = document.getElementById('qb-reset');
+  var qbT = document.getElementById('__TID__');
+  var resetBtn = document.getElementById('__TID__-reset');
   if (!qbT) return;
 
   var ONPEAK  = [8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23];
@@ -445,10 +452,7 @@ def _quartile_bands_table_html(
 
   // Static forecast values
   var fcst = {};
-  """ + "".join(
-        f"  fcst[{int(c[2:])}] = {forecast_vals[c]:.4f};\n"
-        for c in HE_COLS if pd.notna(forecast_vals[c])
-    ) + """
+  """ + fcst_js + """
 
   // Static actual values (null if no actuals)
   """ + actual_js_lines + """
@@ -484,30 +488,30 @@ def _quartile_bands_table_html(
 
   function recompute() {
     var ov = {};
-    for (var h = 1; h <= 24; h++) ov[h] = val(qbQ('qb-override', h));
+    for (var h = 1; h <= 24; h++) ov[h] = val(qbQ('__TID__-override', h));
 
     // Summary cells for Override
     var onArr  = ONPEAK.map(function(h){ return ov[h]; });
     var offArr = OFFPEAK.map(function(h){ return ov[h]; });
     var allArr = []; for (var h = 1; h <= 24; h++) allArr.push(ov[h]);
-    var cOn  = qbS('qb-override','OnPeak');
-    var cOff = qbS('qb-override','OffPeak');
-    var cFl  = qbS('qb-override','Flat');
+    var cOn  = qbS('__TID__-override','OnPeak');
+    var cOff = qbS('__TID__-override','OffPeak');
+    var cFl  = qbS('__TID__-override','Flat');
     if (cOn)  cOn.textContent  = fmt(mean(onArr));
     if (cOff) cOff.textContent = fmt(mean(offArr));
     if (cFl)  cFl.textContent  = fmt(mean(allArr));
 
-    // Fcst − Ovr
-    updateDiffRow('qb-diff-fo', function(h) {
+    // Fcst - Ovr
+    updateDiffRow('__TID__-diff-fo', function(h) {
       return (!isNaN(ov[h]) && fcst[h] !== undefined) ? fcst[h] - ov[h] : NaN;
     });
 
-    // Fcst − Actual and Ovr − Actual (only if actuals exist)
+    // Fcst - Actual and Ovr - Actual (only if actuals exist)
     if (act) {
-      updateDiffRow('qb-diff-fa', function(h) {
+      updateDiffRow('__TID__-diff-fa', function(h) {
         return (fcst[h] !== undefined && act[h] !== undefined) ? fcst[h] - act[h] : NaN;
       });
-      updateDiffRow('qb-diff-oa', function(h) {
+      updateDiffRow('__TID__-diff-oa', function(h) {
         return (!isNaN(ov[h]) && act[h] !== undefined) ? ov[h] - act[h] : NaN;
       });
     }
@@ -515,7 +519,7 @@ def _quartile_bands_table_html(
     // Highlight edited cells, show/hide reset
     var anyEdited = false;
     for (var h = 1; h <= 24; h++) {
-      var cell = qbQ('qb-override', h);
+      var cell = qbQ('__TID__-override', h);
       if (!cell || !cell.hasAttribute('data-original')) continue;
       var orig = parseFloat(cell.getAttribute('data-original'));
       if (!isNaN(orig) && !isNaN(ov[h]) && Math.abs(ov[h] - orig) > 0.001) {
@@ -528,7 +532,7 @@ def _quartile_bands_table_html(
     resetBtn.style.display = anyEdited ? 'inline-block' : 'none';
 
     // Update Override trace on the QB plot
-    var qbPlot = document.getElementById('qb-plot');
+    var qbPlot = document.getElementById('__PLOT_ID__');
     if (qbPlot && qbPlot.data) {
       var idx = -1;
       for (var i = 0; i < qbPlot.data.length; i++) {
@@ -537,14 +541,14 @@ def _quartile_bands_table_html(
       if (idx >= 0) {
         var newY = [];
         for (var h = 1; h <= 24; h++) newY.push(isNaN(ov[h]) ? null : ov[h]);
-        Plotly.restyle('qb-plot', {y: [newY]}, [idx]);
+        Plotly.restyle('__PLOT_ID__', {y: [newY]}, [idx]);
       }
     }
   }
 
   // Listen for edits in Override row
   qbT.addEventListener('input', function(e) {
-    if (e.target.getAttribute('data-row') === 'qb-override') {
+    if (e.target.getAttribute('data-row') === '__TID__-override') {
       recompute();
     }
   });
@@ -552,7 +556,7 @@ def _quartile_bands_table_html(
   // Reset button
   resetBtn.addEventListener('click', function() {
     for (var h = 1; h <= 24; h++) {
-      var cell = qbQ('qb-override', h);
+      var cell = qbQ('__TID__-override', h);
       if (cell && cell.hasAttribute('data-original'))
         cell.textContent = cell.getAttribute('data-original');
     }
@@ -560,6 +564,8 @@ def _quartile_bands_table_html(
   });
 })();
 </script>"""
+    js_block = js_block.replace("__TID__", tid).replace("__PLOT_ID__", plot_id)
+    html += js_block
 
     return html
 
@@ -571,6 +577,7 @@ def _quartile_bands_plot_html(
     df_forecast: pd.DataFrame,
     output_table: pd.DataFrame,
     has_actuals: bool,
+    plot_id: str = "qb-plot",
 ) -> str:
     """Plotly chart with quantile bands, median, forecast, actual, and outlier markers."""
     hours = df_forecast["hour_ending"].values
@@ -681,7 +688,7 @@ def _quartile_bands_plot_html(
     )
     fig.update_xaxes(dtick=1, range=[0.5, 24.5])
 
-    return fig.to_html(include_plotlyjs="cdn", full_html=False, div_id="qb-plot")
+    return fig.to_html(include_plotlyjs="cdn", full_html=False, div_id=plot_id)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────

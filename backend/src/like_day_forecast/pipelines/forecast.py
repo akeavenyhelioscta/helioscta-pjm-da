@@ -17,7 +17,7 @@ from tabulate import tabulate
 from src.like_day_forecast import configs
 from src.like_day_forecast.features.builder import build_daily_features
 from src.like_day_forecast.similarity.engine import find_analogs
-from src.data import lmps_hourly
+from src.data import lmps_hourly, ice_power_intraday
 from src.like_day_forecast.evaluation.metrics import evaluate_forecast
 from src.utils.cache_utils import pull_with_cache
 
@@ -50,6 +50,135 @@ def _add_summary_cols(row_dict: dict) -> dict:
     return row_dict
 
 
+def _next_business_day(d: date) -> date:
+    """Return the next business day after *d* (skip weekends)."""
+    dt = d + timedelta(days=1)
+    while dt.weekday() >= 5:
+        dt += timedelta(days=1)
+    return dt
+
+
+def _get_ice_forward_price(
+    target_date: date,
+    pull_cache_kwargs: dict,
+) -> float | None:
+    """Get ICE NxtDay DA on-peak price scalar for a delivery date.
+
+    Returns settle when available; falls back to WAP.
+    """
+    session = _get_ice_session_info(target_date, pull_cache_kwargs)
+    if session is None:
+        return None
+    return session["ice_onpeak_price"]
+
+
+def _get_ice_session_info(
+    target_date: date,
+    pull_cache_kwargs: dict,
+) -> dict | None:
+    """Get latest ICE NxtDay DA session context for a delivery date."""
+    ice_cache_kwargs = {k: v for k, v in pull_cache_kwargs.items() if k != "ttl_hours"}
+    try:
+        df_settles = pull_with_cache(
+            source_name="ice_power_settles",
+            pull_fn=ice_power_intraday.pull_settles,
+            pull_kwargs={"lookback_days": 7},
+            ttl_hours=0.083,
+            **ice_cache_kwargs,
+        )
+    except Exception as e:
+        logger.warning("Could not pull ICE settles for ICE context: %s", e)
+        return None
+
+    if df_settles is None or len(df_settles) == 0:
+        return None
+
+    df_da = df_settles[df_settles["product"] == "NxtDay DA"].copy()
+    if len(df_da) == 0:
+        return None
+
+    # Compute delivery date for each trade_date (D1 = next business day)
+    df_da["trade_date"] = pd.to_datetime(df_da["trade_date"]).dt.date
+    df_da["delivery_date"] = df_da["trade_date"].apply(_next_business_day)
+
+    df_match = df_da[df_da["delivery_date"] == target_date]
+    if len(df_match) == 0:
+        logger.warning("No ICE NxtDay DA settle for delivery %s", target_date)
+        return None
+
+    latest = df_match.sort_values("trade_date", ascending=False).iloc[0]
+    settle = latest.get("settle")
+    vwap = latest.get("vwap")
+    high = latest.get("high")
+    low = latest.get("low")
+
+    settle_value = float(settle) if pd.notna(settle) else None
+    wap_value = float(vwap) if pd.notna(vwap) else None
+    high_value = float(high) if pd.notna(high) else None
+    low_value = float(low) if pd.notna(low) else None
+
+    ice_onpeak_price = settle_value if settle_value is not None else wap_value
+    if ice_onpeak_price is None:
+        return None
+
+    return {
+        "trade_date": latest.get("trade_date"),
+        "delivery_date": latest.get("delivery_date"),
+        "ice_onpeak_price": ice_onpeak_price,
+        "settle": settle_value,
+        "high": high_value,
+        "low": low_value,
+        "wap": wap_value,
+    }
+
+
+def _format_price(value: float | None) -> str:
+    """Format optional ICE price for display."""
+    if value is None:
+        return "n/a"
+    return f"${value:.2f}/MWh"
+
+
+def _quantile_label(q: float) -> str:
+    """Format quantile label for table output (e.g., P90, P37.5)."""
+    q_pct = q * 100
+    if float(q_pct).is_integer():
+        return f"P{int(q_pct):02d}"
+    return f"P{q_pct:.1f}".rstrip("0").rstrip(".")
+
+
+def _apply_ice_level_adjustment(
+    df_forecast: pd.DataFrame,
+    ice_onpeak_price: float,
+) -> pd.DataFrame:
+    """Scale on-peak forecast hours to match ICE forward price level.
+
+    Preserves the hourly shape from like-day analogs.  On-peak hours
+    (HE8-23) are uniformly scaled so their average matches the ICE
+    NxtDay DA settlement.  Off-peak hours are unchanged (no off-peak
+    ICE product available).
+    """
+    onpeak_mask = df_forecast["hour_ending"].isin(ONPEAK_HOURS)
+    current_onpeak = df_forecast.loc[onpeak_mask, "point_forecast"].mean()
+
+    if current_onpeak <= 0 or np.isnan(current_onpeak):
+        logger.warning("Cannot apply ICE level adjustment: on-peak avg is zero/NaN")
+        return df_forecast
+
+    scale = ice_onpeak_price / current_onpeak
+    logger.info(
+        "ICE level adjustment: scaling on-peak by %.3f "
+        "(like-day=%.2f → ICE=%.2f)",
+        scale, current_onpeak, ice_onpeak_price,
+    )
+
+    df_out = df_forecast.copy()
+    q_cols = [c for c in df_out.columns if c.startswith("q_")]
+    scale_cols = ["point_forecast"] + q_cols
+    df_out.loc[onpeak_mask, scale_cols] *= scale
+    return df_out
+
+
 def run(
     forecast_date: str | None = None,
     n_analogs: int = configs.DEFAULT_N_ANALOGS,
@@ -59,6 +188,7 @@ def run(
     cache_enabled: bool = configs.CACHE_ENABLED,
     cache_ttl_hours: float = configs.CACHE_TTL_HOURS,
     force_refresh: bool = configs.FORCE_CACHE_REFRESH,
+    df_features: pd.DataFrame | None = None,
 ) -> dict:
     """Run the like-day forecast pipeline for a single target date.
 
@@ -119,16 +249,20 @@ def run(
         force_refresh=force_refresh,
     )
 
-    # 1. Build daily feature matrix
-    logger.info("Building daily feature matrix...")
-    df_features = build_daily_features(
-        schema=config.schema,
-        hub=config.hub,
-        renewable_mode=config.resolved_renewable_mode(),
-        renewable_region=config.renewable_forecast_region,
-        renewable_blend_pjm_weight=config.renewable_blend_weight(offset=1),
-        **builder_cache_kwargs,
-    )
+    # 1. Build daily feature matrix (skip if pre-built matrix provided)
+    if df_features is None:
+        logger.info("Building daily feature matrix...")
+        df_features = build_daily_features(
+            schema=config.schema,
+            hub=config.hub,
+            renewable_mode=config.resolved_renewable_mode(),
+            renewable_region=config.renewable_forecast_region,
+            renewable_blend_pjm_weight=config.renewable_blend_weight(offset=1),
+            include_ice_forward=config.include_ice_forward,
+            **builder_cache_kwargs,
+        )
+    else:
+        logger.info("Using pre-built feature matrix (%d rows)", len(df_features))
 
     available_dates = sorted(df_features["date"].unique())
     logger.info(f"Feature matrix: {len(available_dates):,} days "
@@ -234,6 +368,45 @@ def run(
 
     df_forecast = pd.DataFrame(forecast_rows)
 
+    # 4b. Apply ICE level adjustment (optional)
+    ice_session_info: dict | None = None
+    ice_info: dict | None = None
+    if config.ice_level_adjustment:
+        ice_session_info = _get_ice_session_info(target_date, pull_cache_kwargs)
+        ice_price = (
+            ice_session_info["ice_onpeak_price"]
+            if ice_session_info is not None
+            else None
+        )
+        if ice_price is not None:
+            onpeak_before = df_forecast.loc[
+                df_forecast["hour_ending"].isin(ONPEAK_HOURS), "point_forecast"
+            ].mean()
+            df_forecast = _apply_ice_level_adjustment(df_forecast, ice_price)
+            ice_info = {
+                "ice_onpeak_price": ice_price,
+                "ice_settle": (
+                    ice_session_info["settle"] if ice_session_info is not None else None
+                ),
+                "ice_high": (
+                    ice_session_info["high"] if ice_session_info is not None else None
+                ),
+                "ice_low": (
+                    ice_session_info["low"] if ice_session_info is not None else None
+                ),
+                "ice_wap": (
+                    ice_session_info["wap"] if ice_session_info is not None else None
+                ),
+                "onpeak_before_adjustment": round(onpeak_before, 2),
+                "scale_factor": round(ice_price / onpeak_before, 4)
+                if onpeak_before > 0 else None,
+            }
+        else:
+            logger.warning(
+                "ICE level adjustment enabled but no ICE price found for %s",
+                target_date,
+            )
+
     # 5. Build pivoted output table
     forecast_hourly = dict(zip(df_forecast["hour_ending"].astype(int), df_forecast["point_forecast"]))
 
@@ -255,7 +428,7 @@ def run(
     for q in config.quantiles:
         col = f"q_{q:.2f}"
         if col in df_forecast.columns:
-            q_row = {"Date": target_date, "Type": f"P{int(q * 100):02d}"}
+            q_row = {"Date": target_date, "Type": _quantile_label(q)}
             q_hourly = dict(zip(df_forecast["hour_ending"].astype(int), df_forecast[col]))
             for h in range(1, 25):
                 q_row[f"HE{h}"] = q_hourly.get(h)
@@ -282,12 +455,32 @@ def run(
             y_naive=y_naive,
         )
 
+    # 6b. Print ICE forward market context (any ICE scenario)
+    if config.include_ice_forward or config.ice_level_adjustment:
+        if ice_session_info is None:
+            ice_session_info = _get_ice_session_info(target_date, pull_cache_kwargs)
+
+        if ice_session_info is not None:
+            ice_display_price = ice_session_info["ice_onpeak_price"]
+            print(f"\n  ICE NxtDay DA On-Peak for {target_date}: "
+                  f"${ice_display_price:.2f}/MWh")
+            print(
+                "    Session: "
+                f"settle={_format_price(ice_session_info['settle'])}  "
+                f"high={_format_price(ice_session_info['high'])}  "
+                f"low={_format_price(ice_session_info['low'])}  "
+                f"WAP={_format_price(ice_session_info['wap'])}"
+            )
+        else:
+            print(f"\n  ICE NxtDay DA: no settlement found for {target_date}")
+
     # 7. Print results
+    _print_config(config, target_date, reference_date, day_type)
     _print_analogs(analogs_df, target_date, reference_date)
     _print_table(output_table, metrics)
     _print_quantiles(quantiles_table)
 
-    return {
+    result = {
         "output_table": output_table,
         "quantiles_table": quantiles_table,
         "analogs": analogs_df,
@@ -298,7 +491,13 @@ def run(
         "has_actuals": has_actuals,
         "n_analogs_used": n_with_data,
         "df_forecast": df_forecast,
+        "scenario": config.name,
+        "include_ice_forward": config.include_ice_forward,
+        "ice_level_adjustment": config.ice_level_adjustment,
     }
+    if ice_info is not None:
+        result["ice_info"] = ice_info
+    return result
 
 
 def _build_output_table(
@@ -333,6 +532,72 @@ def _build_output_table(
 
     cols = ["Date", "Type"] + [f"HE{h}" for h in range(1, 25)] + ["OnPeak", "OffPeak", "Flat"]
     return pd.DataFrame(rows, columns=cols)
+
+
+def _print_config(
+    config: configs.ScenarioConfig,
+    target_date: date,
+    reference_date: date,
+    day_type: str,
+) -> None:
+    """Print the resolved forecast configuration."""
+    target_dow = DAY_ABBR[target_date.weekday()]
+    ref_dow = DAY_ABBR[reference_date.weekday()]
+    weights = config.resolved_weights()
+
+    # Season window date range
+    from datetime import timedelta as _td
+    window = config.season_window_days
+    win_start = target_date - _td(days=window)
+    win_end = target_date + _td(days=window)
+
+    print("\n" + "=" * 90)
+    print("  FORECAST CONFIGURATION")
+    print("=" * 90)
+
+    print(f"\n  Target        {target_date} ({target_dow})")
+    print(f"  Reference     {reference_date} ({ref_dow})")
+    print(f"  Day-type      {day_type}")
+    print(f"  Hub           {config.hub}")
+    print(f"  Scenario      {config.name}")
+
+    print(f"\n  --- Analog Selection {'-' * 28}")
+    print(f"  N analogs          {config.n_analogs}")
+    print(f"  Weight method      {config.weight_method}")
+
+    print(f"\n  --- Pre-Filtering {'-' * 30}")
+    print(f"  Season window      +/-{window}d  ({win_start.strftime('%b %d')} - {win_end.strftime('%b %d')})")
+    print(f"  DOW group filter   {config.same_dow_group}")
+    print(f"  Calendar filter    {config.apply_calendar_filter}")
+    print(f"  Regime filter      {config.apply_regime_filter}")
+    print(f"  Outage regime      {config.apply_outage_regime_filter}  (tol={config.outage_tolerance_std} std)")
+    print(f"  Exclude holidays   {config.exclude_holidays}")
+    if config.exclude_dates:
+        print(f"  Exclude dates      {', '.join(config.exclude_dates)}")
+
+    print(f"\n  --- Adaptive Filter {'-' * 28}")
+    print(f"  Enabled            {config.adaptive_filter_enabled}")
+    if config.adaptive_filter_enabled:
+        print(f"  Extreme threshold  {config.adaptive_extreme_threshold_std} std")
+        print(f"  Adaptive window    +/-{config.adaptive_season_window_days}d")
+        print(f"  Adaptive DOW       {config.adaptive_same_dow_group}")
+        print(f"  Adaptive method    {config.adaptive_weight_method} (T={config.adaptive_softmax_temperature})")
+
+    # Feature weights — group by category, skip zero-weight groups
+    active = {k: v for k, v in sorted(weights.items()) if v > 0}
+    disabled = [k for k, v in sorted(weights.items()) if v == 0]
+
+    print(f"\n  --- Feature Weights (active) {'-' * 19}")
+    # Print in descending weight order for quick scanning
+    for name, w in sorted(active.items(), key=lambda x: -x[1]):
+        bar = "#" * int(w * 4)
+        print(f"  {name:<32} {w:>5.2f}  {bar}")
+
+    if disabled:
+        print(f"\n  --- Disabled Groups {'-' * 28}")
+        print(f"  {', '.join(disabled)}")
+
+    print("\n" + "=" * 90)
 
 
 def _print_analogs(analogs_df: pd.DataFrame, target_date: date, reference_date: date) -> None:

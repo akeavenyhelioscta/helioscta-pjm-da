@@ -204,6 +204,11 @@ FEATURE_GROUPS = {
         "columns": ["net_load_evening_ramp", "net_load_morning_ramp"],
         "default_metric": "euclidean",
     },
+    "ice_forward_level": {
+        "columns": ["ice_da_onpeak_settle", "ice_da_onpeak_vwap",
+                     "ice_da_onpeak_vs_prior"],
+        "default_metric": "euclidean",
+    },
 }
 
 

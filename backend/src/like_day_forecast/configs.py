@@ -38,7 +38,19 @@ HOUR_COL: str = "hour_ending"
 HOUR_ENDING_COL: str = "hour_ending"
 
 # Quantiles for probabilistic output (matches da-model for comparability)
-QUANTILES: list[float] = [0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99]
+QUANTILES: list[float] = [
+    0.01,
+    0.05,
+    0.10,
+    0.25,
+    0.375,
+    0.50,
+    0.625,
+    0.75,
+    0.90,
+    0.95,
+    0.99,
+]
 HOURS: list[int] = list(range(1, 25))
 
 # LMP feature columns
@@ -84,8 +96,8 @@ FEATURE_GROUP_WEIGHTS: dict[str, float] = {
     "fuel_mix_shares": 0.0,        # endogenous; disable in analog distance
     "net_load_level": 2.5,         # thermal generation requirement (load - renewables)
     "net_load_ramps": 2.0,         # evening/morning thermal ramp intensity
-    "target_weather_level": 0,      # disabled — load forecast captures weather impact
-    "target_weather_hdd_cdd": 0,    # disabled
+    "target_weather_level": 1.5,     # D+1 temp forecast — needed for out-of-season heat/cold
+    "target_weather_hdd_cdd": 2.0,  # D+1 CDD/HDD — critical for heat/cold event analog selection
     "target_renewable_level": 3.0,  # core midday displacement driver
     "target_outage_level": 4.0,    # core D+1 supply adequacy signal
     "target_outage_west_level": 2.0, # D+1 WEST outage forecast — W.Hub pricing zone
@@ -95,6 +107,7 @@ FEATURE_GROUP_WEIGHTS: dict[str, float] = {
     "target_load_midatl_level": 1.0,
     "target_load_south_level": 0.5,
     "target_meteo_load_level": 1.5,  # Meteologica independent load forecast
+    "ice_forward_level": 0.0,        # ICE NxtDay DA forward price — disabled by default
 }
 
 # Delivery-day profiles for D+1 scheduling effects.
@@ -133,7 +146,7 @@ DAY_TYPE_SCENARIO_PROFILES: dict[str, dict[str, Any]] = {
 
 # Pre-filtering defaults
 FILTER_SAME_DOW_GROUP: bool = True
-FILTER_SEASON_WINDOW_DAYS: int = 30
+FILTER_SEASON_WINDOW_DAYS: int = 60
 FILTER_MIN_POOL_SIZE: int = 20
 FILTER_EXCLUDE_HOLIDAYS: bool = True  # auto-exclude NERC holidays when target is not a holiday
 
@@ -149,7 +162,7 @@ EXCLUDE_DATES: list[str] = [
 
 # Outage regime filter: ensure candidate pool matches target outage environment
 FILTER_OUTAGE_REGIME: bool = True
-FILTER_OUTAGE_TOLERANCE_STD: float = 1.0  # keep candidates within ±1 std of target outage z-score
+FILTER_OUTAGE_TOLERANCE_STD: float = 1.5  # keep candidates within ±1.5 std (relaxed from 1.0 to allow cross-season heat/cold events)
 
 # Adaptive filtering for extreme regimes
 ADAPTIVE_FILTER_ENABLED: bool = True
@@ -162,11 +175,12 @@ ADAPTIVE_N_ANALOGS: int = 15                    # fewer analogs to concentrate w
 ADAPTIVE_WEIGHT_METHOD: str = "softmax"          # sharper weighting in extreme regime
 ADAPTIVE_SOFTMAX_TEMPERATURE: float = 0.3        # low T = more concentrated on best match
 
-# Day-of-week groups (PJM-specific)
+# Day-of-week groups — uses Sun=0..Sat=6 numbering to match
+# dates_daily.day_of_week_number from the database.
 DOW_GROUPS: dict[str, list[int]] = {
-    "weekday": [0, 1, 2, 3, 4],     # Mon-Fri
-    "saturday": [5],
-    "sunday": [6],
+    "weekday": [1, 2, 3, 4, 5],     # Mon-Fri  (Sun=0 numbering)
+    "saturday": [6],
+    "sunday": [0],
 }
 
 # Weather
@@ -244,6 +258,11 @@ class ScenarioConfig:
         default_factory=lambda: list(QUANTILES),
     )
 
+    # ICE forward price integration
+    include_ice_forward: bool = False   # add ICE features to analog selection
+    ice_level_adjustment: bool = False  # scale on-peak output to ICE level
+    ice_forward_weight: float = 3.0     # weight for ice_forward_level group when active
+
     # Database / target
     schema: str = SCHEMA
     hub: str = HUB
@@ -274,7 +293,11 @@ class ScenarioConfig:
 
     def resolved_weights(self) -> dict[str, float]:
         """Return feature weights, falling back to module defaults."""
-        return dict(self.feature_group_weights or FEATURE_GROUP_WEIGHTS)
+        weights = dict(self.feature_group_weights or FEATURE_GROUP_WEIGHTS)
+        # Auto-activate ICE forward weight when include_ice_forward is True
+        if self.include_ice_forward and weights.get("ice_forward_level", 0.0) == 0.0:
+            weights["ice_forward_level"] = self.ice_forward_weight
+        return weights
 
     def resolved_day_type_profiles(self) -> dict[str, dict[str, Any]]:
         """Return day-type override profiles with defaults filled in."""
@@ -327,6 +350,9 @@ class ScenarioConfig:
             "renewable_forecast_region": self.renewable_forecast_region,
             "renewable_blend_pjm_weight_d1": self.renewable_blend_pjm_weight_d1,
             "renewable_blend_pjm_weight_d7": self.renewable_blend_pjm_weight_d7,
+            "include_ice_forward": self.include_ice_forward,
+            "ice_level_adjustment": self.ice_level_adjustment,
+            "ice_forward_weight": self.ice_forward_weight,
         }
         for k, v in self.resolved_weights().items():
             d[f"w_{k}"] = v

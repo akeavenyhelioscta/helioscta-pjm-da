@@ -74,7 +74,7 @@ def crps(y_true: np.ndarray, y_pred_df: pd.DataFrame, quantiles: list[float]) ->
     losses.sort(key=lambda x: x[0])
     qs = [l[0] for l in losses]
     pls = [l[1] for l in losses]
-    return np.trapz(pls, qs)
+    return np.trapezoid(pls, qs)
 
 
 def evaluate_forecast(
