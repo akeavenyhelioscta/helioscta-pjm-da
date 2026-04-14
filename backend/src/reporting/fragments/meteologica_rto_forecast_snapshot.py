@@ -1,10 +1,10 @@
-"""PJM RTO Forecast Snapshot.
+"""Meteologica RTO Forecast Snapshot.
 
 Sections:
   1. All-dates summary table (Load, Wind, Solar, Net Load for every available date)
   2. Per-date sections — each date is one section containing:
      a. Table with Load/Wind/Solar + divider + Net Load (JS toggle: outright / ramp)
-     b. Row 1: Load, Solar, Wind charts (each with outright/ramp toggle, vintages as grouped bars)
+     b. Row 1: Load, Solar, Wind charts (each with outright/ramp toggle, all vintages)
      c. Row 2: Net Load profile (with solar+wind overlay) + Net Load ramp
 """
 
@@ -23,8 +23,7 @@ from plotly.subplots import make_subplots
 
 from src.data import (
     load_forecast_vintages,
-    pjm_solar_forecast_hourly,
-    pjm_wind_forecast_hourly,
+    meteologica_generation_forecast_hourly,
 )
 from src.like_day_forecast import configs
 from src.reporting.fragments.like_day_forecast_chart_utils import (
@@ -83,7 +82,7 @@ def build_fragments(
 ) -> list[Section]:
     del schema
 
-    logger.info("Building PJM RTO forecast snapshot fragments...")
+    logger.info("Building Meteologica RTO forecast snapshot fragments...")
 
     ck = dict(
         cache_dir=cache_dir,
@@ -97,18 +96,18 @@ def build_fragments(
     wind_raw = _pull_generation(kind="wind", **ck)
 
     if load_raw.empty or solar_raw.empty or wind_raw.empty:
-        return [("PJM RTO Forecast Snapshot", _empty_html("Missing load/solar/wind forecast data."), None)]
+        return [("Meteologica RTO Forecast Snapshot", _empty_html("Missing load/solar/wind forecast data."), None)]
 
     cutoff_label = _pick_cutoff_label(load_raw, solar_raw, wind_raw)
     latest_df = _build_hourly_frame(load_raw, solar_raw, wind_raw, "Latest")
     cutoff_df = _build_hourly_frame(load_raw, solar_raw, wind_raw, cutoff_label) if cutoff_label else pd.DataFrame()
 
     if latest_df.empty:
-        return [("PJM RTO Forecast Snapshot", _empty_html("No hourly rows available."), None)]
+        return [("Meteologica RTO Forecast Snapshot", _empty_html("No hourly rows available."), None)]
 
     available_dates = sorted(latest_df["forecast_date"].unique())
     if not available_dates:
-        return [("PJM RTO Forecast Snapshot", _empty_html("No forecast dates available."), None)]
+        return [("Meteologica RTO Forecast Snapshot", _empty_html("No forecast dates available."), None)]
 
     meta = _build_meta_line(cutoff_label, latest_df, cutoff_df)
 
@@ -145,7 +144,7 @@ def build_fragments(
 
 
 # ══════════════════════════════════════════════════════════════════════
-# Regional entry points (load-only — PJM has no regional solar/wind)
+# Regional entry points (full load/solar/wind for Meteologica regions)
 # ══════════════════════════════════════════════════════════════════════
 
 _REGION_LABELS = {"WEST": "Western", "MIDATL": "Mid-Atlantic", "SOUTH": "Southern"}
@@ -160,10 +159,10 @@ def _build_fragments_for_region(
     cache_ttl_hours: float = configs.CACHE_TTL_HOURS,
     force_refresh: bool = configs.FORCE_CACHE_REFRESH,
 ) -> list[Section]:
-    """Build load-only forecast snapshot for a PJM region."""
+    """Build full forecast snapshot for a Meteologica region."""
     del schema
 
-    logger.info(f"Building PJM {region_label} forecast snapshot fragments...")
+    logger.info(f"Building Meteologica {region_label} forecast snapshot fragments...")
 
     ck = dict(
         cache_dir=cache_dir,
@@ -173,31 +172,39 @@ def _build_fragments_for_region(
     )
 
     load_raw = _pull_load(region=region, **ck)
-    if load_raw.empty:
-        return [(f"PJM {region_label} Forecast Snapshot",
-                 _empty_html(f"No load data for {region_label}."), None)]
+    solar_raw = _pull_generation(kind="solar", region=region, **ck)
+    wind_raw = _pull_generation(kind="wind", region=region, **ck)
 
-    available_dates = sorted(load_raw["forecast_date"].unique())
+    if load_raw.empty and solar_raw.empty and wind_raw.empty:
+        return [(f"Meteologica {region_label} Forecast Snapshot",
+                 _empty_html(f"No forecast data for {region_label}."), None)]
+
+    has_all = not (load_raw.empty or solar_raw.empty or wind_raw.empty)
+    cutoff_label = _pick_cutoff_label(load_raw, solar_raw, wind_raw) if has_all else None
+    latest_df = _build_hourly_frame(load_raw, solar_raw, wind_raw, "Latest")
+    cutoff_df = (
+        _build_hourly_frame(load_raw, solar_raw, wind_raw, cutoff_label)
+        if cutoff_label else pd.DataFrame()
+    )
+
+    if latest_df.empty:
+        return [(f"Meteologica {region_label} Forecast Snapshot",
+                 _empty_html(f"No hourly rows for {region_label}."), None)]
+
+    available_dates = sorted(latest_df["forecast_date"].unique())
     if not available_dates:
-        return [(f"PJM {region_label} Forecast Snapshot",
+        return [(f"Meteologica {region_label} Forecast Snapshot",
                  _empty_html("No forecast dates available."), None)]
+
+    meta = _build_meta_line(cutoff_label, latest_df, cutoff_df)
 
     sections: list[Section] = []
 
-    # Section 1: All Forecast Dates — load vintage chart
-    af_prefix = f"pjm{region}AllFcst"
-    load_chart_df = load_raw.copy()
-    load_chart_df["forecast_date"] = pd.to_datetime(load_chart_df["forecast_date"])
-    if not load_chart_df.empty:
-        all_fcst_html = build_vintage_chart(
-            chart_id=f"{af_prefix}Load",
-            df=load_chart_df,
-            title=f"Load Forecast — {region_label}",
-            value_col="forecast_mw",
-            y_title="MW",
-            prefix=af_prefix,
-        )
-        sections.append(("All Forecast Dates", all_fcst_html, None))
+    # Section 1: All Forecast Dates — load vintage chart + net load area
+    all_fcst_html = _render_all_forecasts_regional(
+        load_raw, solar_raw, wind_raw, available_dates, region, region_label,
+    )
+    sections.append(("All Forecast Dates", all_fcst_html, None))
 
     # Per-date sections with Day +N label
     today = (pd.Timestamp.now(ET)).date()
@@ -208,14 +215,19 @@ def _build_fragments_for_region(
                         if day_offset >= 0
                         else f"{dt_label} (Day {day_offset})")
 
-        load_vintages = _component_vintages(load_raw, dt)
+        latest_day = _slice_day(latest_df, dt)
+        cutoff_day = _slice_day(cutoff_df, dt) if not cutoff_df.empty else pd.DataFrame()
         dt_key = f"{region.lower()}-{_date_key(dt)}"
 
+        load_vintages = _component_vintages(load_raw, dt)
+        solar_vintages = _component_vintages(solar_raw, dt)
+        wind_vintages = _component_vintages(wind_raw, dt)
+
         content = _STYLE
-        content += _render_load_only_chart(
-            load_vintages, dt_key,
-            f"Load Forecast — {region_label}",
-        )
+        content += _render_snapshot_table(latest_day, meta, dt_key)
+        content += _render_component_charts_row(load_vintages, solar_vintages, wind_vintages, dt_key)
+        content += _render_net_load_row(latest_day, cutoff_day, cutoff_label, dt_key)
+
         sections.append((section_name, content, None))
 
     return sections
@@ -238,7 +250,7 @@ def build_fragments_south(**kwargs) -> list[Section]:
 # ══════════════════════════════════════════════════════════════════════
 
 
-_AF_PREFIX = "rtoAllFcst"
+_AF_PREFIX = "meteoAllFcst"
 
 
 def _render_all_forecasts(
@@ -258,15 +270,46 @@ def _render_all_forecasts(
         html += build_vintage_chart(
             chart_id=load_chart_id,
             df=load_chart_df,
-            title="Load Forecast — RTO",
+            title="Load Forecast — RTO (Meteologica)",
             value_col="forecast_mw",
             y_title="MW",
             prefix=_AF_PREFIX,
         )
 
     # ── Net load stacked area + ramp — all dates on datetime x-axis ──
-    html += _build_net_load_area_chart(load_raw, solar_raw, wind_raw, dates)
+    html += _build_net_load_area_chart(load_raw, solar_raw, wind_raw, dates, div_id="meteo-all-netload")
 
+    return html
+
+
+def _render_all_forecasts_regional(
+    load_raw: pd.DataFrame,
+    solar_raw: pd.DataFrame,
+    wind_raw: pd.DataFrame,
+    dates: list,
+    region: str,
+    region_label: str,
+) -> str:
+    """All-dates overview for a regional snapshot: load vintage + net load area."""
+    html = ""
+    af_prefix = f"meteo{region}AllFcst"
+
+    load_chart_df = load_raw.copy()
+    load_chart_df["forecast_date"] = pd.to_datetime(load_chart_df["forecast_date"])
+    if not load_chart_df.empty:
+        html += build_vintage_chart(
+            chart_id=f"{af_prefix}Load",
+            df=load_chart_df,
+            title=f"Load Forecast — {region_label} (Meteologica)",
+            value_col="forecast_mw",
+            y_title="MW",
+            prefix=af_prefix,
+        )
+
+    html += _build_net_load_area_chart(
+        load_raw, solar_raw, wind_raw, dates,
+        div_id=f"meteo-{region.lower()}-all-netload",
+    )
     return html
 
 
@@ -275,6 +318,7 @@ def _build_net_load_area_chart(
     solar_raw: pd.DataFrame,
     wind_raw: pd.DataFrame,
     dates: list,
+    div_id: str = "meteo-all-netload",
 ) -> str:
     """Stacked area (left) + grouped ramp bars (right), datetime x-axis."""
     rows = []
@@ -394,7 +438,7 @@ def _build_net_load_area_chart(
     fig.update_yaxes(title_text="MW", tickformat=".1s", gridcolor="rgba(99,110,250,0.1)", col=1)
     fig.update_yaxes(title_text="MW/hr", tickformat=".1s", gridcolor="rgba(99,110,250,0.1)", col=2)
 
-    return fig.to_html(include_plotlyjs="cdn", full_html=False, div_id="rs-all-netload")
+    return fig.to_html(include_plotlyjs="cdn", full_html=False, div_id=div_id)
 
 
 def _day_latest_series(raw_df: pd.DataFrame, target_date) -> pd.Series:
@@ -417,7 +461,7 @@ def _render_snapshot_table(day_df: pd.DataFrame, meta: str, dt_key: str) -> str:
     if day_df.empty:
         return _empty_html("No rows.")
 
-    tid = f"rs-tbl-{dt_key}"
+    tid = f"ms-tbl-{dt_key}"
 
     # Outright rows
     outright_rows = [
@@ -451,18 +495,18 @@ def _render_snapshot_table(day_df: pd.DataFrame, meta: str, dt_key: str) -> str:
     header += '</tr></thead>'
 
     toggle_btn = (
-        f'<button class="rs-toggle" onclick="rsToggle(\'{tid}\')" id="{tid}-btn">Show Ramp</button>'
+        f'<button class="ms-toggle" onclick="msToggle(\'{tid}\')" id="{tid}-btn">Show Ramp</button>'
     )
 
     return (
-        f'<div class="rs-wrap"><div class="rs-meta">{meta}</div>'
+        f'<div class="ms-wrap"><div class="ms-meta">{meta}</div>'
         f'{toggle_btn}'
-        f'<div class="rs-tw"><table class="rs-t" id="{tid}">{header}'
-        f'<tbody class="rs-tbody-active" id="{tid}-outright">{outright_body}</tbody>'
+        f'<div class="ms-tw"><table class="ms-t" id="{tid}">{header}'
+        f'<tbody class="ms-tbody-active" id="{tid}-outright">{outright_body}</tbody>'
         f'<tbody style="display:none;" id="{tid}-ramp">{ramp_body}</tbody>'
         f'</table></div></div>'
         f'''<script>
-function rsToggle(tid) {{
+function msToggle(tid) {{
   var o = document.getElementById(tid + '-outright');
   var r = document.getElementById(tid + '-ramp');
   var b = document.getElementById(tid + '-btn');
@@ -511,7 +555,7 @@ def _tbl_body(component_rows: list[str], net_rows: list[str]) -> str:
 
 
 def _component_vintages(raw_df: pd.DataFrame, target_date) -> dict[str, pd.Series]:
-    """Extract {vintage_label: Series(hour_ending → MW)} for a given date."""
+    """Extract {vintage_label: Series(hour_ending -> MW)} for a given date."""
     if raw_df.empty:
         return {}
     day = raw_df[raw_df["forecast_date"] == target_date]
@@ -533,14 +577,11 @@ def _render_component_charts_row(
     Uses a single ``make_subplots`` figure so Plotly handles column layout
     internally, avoiding flex-container sizing issues that can truncate charts.
 
-    Each vintage gets an outright line and a ramp bar trace.  The toggle button
-    fully hides one set and shows the other.  Both sets carry legend entries
-    (only one set visible at a time) so individual vintages can be toggled.
+    Meteologica has full vintage support for all three components, so all
+    vintages are shown in every subplot (unlike PJM which only has Latest
+    for solar/wind).
     """
-    solar_latest = {k: v for k, v in solar_v.items() if k == "Latest"}
-    wind_latest = {k: v for k, v in wind_v.items() if k == "Latest"}
-
-    chart_id = f"rs-comp-{dt_key}"
+    chart_id = f"ms-comp-{dt_key}"
 
     fig = make_subplots(
         rows=1, cols=3,
@@ -551,8 +592,8 @@ def _render_component_charts_row(
     hours = list(range(1, 25))
     components = [
         ("Load", load_v, 1),
-        ("Solar", solar_latest, 2),
-        ("Wind", wind_latest, 3),
+        ("Solar", solar_v, 2),
+        ("Wind", wind_v, 3),
     ]
 
     # Track trace indices for the toggle JS
@@ -635,7 +676,7 @@ def _render_component_charts_row(
     js_key = dt_key.replace("-", "_")
     btn_id = f"{chart_id}-ramp-btn"
     toggle_btn = (
-        f'<button class="rs-toggle" onclick="rsCompToggle_{js_key}()"'
+        f'<button class="ms-toggle" onclick="msCompToggle_{js_key}()"'
         f' id="{btn_id}">Show Ramp</button>'
     )
 
@@ -650,7 +691,7 @@ def _render_component_charts_row(
   var legendOut  = {json.dumps(legend_outright)};
   var legendRamp = {json.dumps(legend_ramp)};
 
-  window.rsCompToggle_{js_key} = function() {{
+  window.msCompToggle_{js_key} = function() {{
     var btn = document.getElementById(btnId);
     var toRamp = (btn.textContent === "Show Ramp");
 
@@ -666,108 +707,6 @@ def _render_component_charts_row(
     Plotly.relayout(chartId, {{
       "yaxis.autorange": true, "yaxis2.autorange": true, "yaxis3.autorange": true
     }});
-  }};
-}})();
-</script>'''
-
-    return html
-
-
-# ══════════════════════════════════════════════════════════════════════
-# Regional: Load-only chart (no solar/wind available for PJM regions)
-# ══════════════════════════════════════════════════════════════════════
-
-
-def _render_load_only_chart(
-    load_v: dict[str, pd.Series],
-    dt_key: str,
-    title: str = "Load Forecast",
-) -> str:
-    """Single load vintage chart with outright/ramp toggle for regional sections."""
-    chart_id = f"rs-load-{dt_key}"
-    fig = go.Figure()
-    hours = list(range(1, 25))
-
-    all_outright: list[int] = []
-    all_ramp: list[int] = []
-    legend_outright: list[int] = []
-    legend_ramp: list[int] = []
-
-    vintage_order = [v for v in ["Latest"] + CUTOFF_PRIORITY if v in load_v]
-    for vint in vintage_order:
-        s = load_v[vint].reindex(hours)
-        color = VINTAGE_COLORS.get(vint, "#94a3b8")
-        ramp = s.diff()
-
-        idx = len(fig.data)
-        all_outright.append(idx)
-        legend_outright.append(idx)
-        fig.add_trace(go.Scatter(
-            x=hours, y=s.values,
-            mode="lines+markers", name=vint,
-            line=dict(color=color, width=2.2 if vint == "Latest" else 1.5,
-                      dash="solid" if vint == "Latest" else "dash"),
-            marker=dict(size=4 if vint == "Latest" else 3),
-            hovertemplate=f"{vint}<br>HE %{{x}}<br>%{{y:,.0f}} MW<extra></extra>",
-        ))
-
-        idx = len(fig.data)
-        all_ramp.append(idx)
-        legend_ramp.append(idx)
-        fig.add_trace(go.Bar(
-            x=hours, y=ramp.values,
-            name=vint, marker_color=color, opacity=0.8,
-            visible=False, showlegend=False,
-            hovertemplate=f"{vint}<br>HE %{{x}}<br>%{{y:+,.0f}} MW/hr<extra></extra>",
-        ))
-
-    fig.update_layout(
-        template=PLOTLY_TEMPLATE,
-        height=400,
-        title=dict(text=title, font=dict(size=14)),
-        margin=dict(l=50, r=20, t=60, b=40),
-        legend=dict(font=dict(size=9), orientation="h", yanchor="bottom", y=1.04, x=0),
-        hovermode="x unified",
-        barmode="group",
-    )
-    fig.update_xaxes(
-        dtick=1, range=[0.5, 24.5], autorange=False,
-        fixedrange=True, title_text="Hour Ending",
-    )
-    fig.update_yaxes(title_text="MW")
-
-    chart_html = fig.to_html(
-        include_plotlyjs="cdn", full_html=False,
-        div_id=chart_id, config=PLOTLY_LOCKED_CONFIG,
-    )
-
-    js_key = dt_key.replace("-", "_")
-    btn_id = f"{chart_id}-ramp-btn"
-    toggle_btn = (
-        f'<button class="rs-toggle" onclick="rsLoadToggle_{js_key}()"'
-        f' id="{btn_id}">Show Ramp</button>'
-    )
-
-    html = f'<div style="padding:8px;">{toggle_btn}{chart_html}</div>'
-
-    html += f'''<script>
-(function() {{
-  var chartId    = "{chart_id}";
-  var btnId      = "{btn_id}";
-  var outright   = {json.dumps(all_outright)};
-  var ramp       = {json.dumps(all_ramp)};
-  var legendOut  = {json.dumps(legend_outright)};
-  var legendRamp = {json.dumps(legend_ramp)};
-
-  window.rsLoadToggle_{js_key} = function() {{
-    var btn = document.getElementById(btnId);
-    var toRamp = (btn.textContent === "Show Ramp");
-    outright.forEach(function(i) {{ Plotly.restyle(chartId, {{visible: !toRamp}}, [i]); }});
-    ramp.forEach(function(i)     {{ Plotly.restyle(chartId, {{visible:  toRamp}}, [i]); }});
-    legendOut.forEach(function(i)  {{ Plotly.restyle(chartId, {{showlegend: !toRamp}}, [i]); }});
-    legendRamp.forEach(function(i) {{ Plotly.restyle(chartId, {{showlegend:  toRamp}}, [i]); }});
-    btn.textContent = toRamp ? "Show Outright" : "Show Ramp";
-    Plotly.relayout(chartId, {{"yaxis.autorange": true}});
   }};
 }})();
 </script>'''
@@ -824,7 +763,7 @@ def _render_net_load_row(
         hovertemplate="HE %{x}<br>Solar: %{y:,.0f} MW<extra></extra>",
     ), row=1, col=1)
 
-    # Gross load line on top
+    # Load line on top
     fig.add_trace(go.Scatter(
         x=hours, y=load, mode="lines", name="Load",
         line=dict(color="#f8fafc", width=2),
@@ -869,7 +808,7 @@ def _render_net_load_row(
     return fig.to_html(
         include_plotlyjs="cdn",
         full_html=False,
-        div_id=f"rs-netload-{dt_key}",
+        div_id=f"ms-netload-{dt_key}",
         config=PLOTLY_LOCKED_CONFIG,
     )
 
@@ -880,9 +819,9 @@ def _render_net_load_row(
 
 
 def _pull_load(region: str = "RTO", **cache_kwargs: Any) -> pd.DataFrame:
-    df = _safe_pull(f"pjm_load_forecast_vintages_{region.lower()}_snapshot",
+    df = _safe_pull(f"meteo_load_forecast_vintages_{region.lower()}_snapshot",
                     load_forecast_vintages.pull_source_vintages,
-                    {"source": "pjm", "region": region}, **cache_kwargs)
+                    {"source": "meteologica", "region": region}, **cache_kwargs)
     if df.empty:
         return df
     out = df.copy()
@@ -895,20 +834,21 @@ def _pull_load(region: str = "RTO", **cache_kwargs: Any) -> pd.DataFrame:
     return out[["forecast_date", "hour_ending", "vintage_label", "forecast_mw", "forecast_execution_datetime"]]
 
 
-def _pull_generation(kind: str, **cache_kwargs: Any) -> pd.DataFrame:
-    if kind == "solar":
-        latest_fn, da_fn = pjm_solar_forecast_hourly.pull, pjm_solar_forecast_hourly.pull_da_cutoff_vintages
-        val_col, src_l, src_d = "solar_forecast", "pjm_solar_rto_snap_l", "pjm_solar_rto_snap_da"
-    else:
-        latest_fn, da_fn = pjm_wind_forecast_hourly.pull, pjm_wind_forecast_hourly.pull_da_cutoff_vintages
-        val_col, src_l, src_d = "wind_forecast", "pjm_wind_rto_snap_l", "pjm_wind_rto_snap_da"
+def _pull_generation(kind: str, region: str = "RTO", **cache_kwargs: Any) -> pd.DataFrame:
+    latest_fn = meteologica_generation_forecast_hourly.pull
+    da_fn = meteologica_generation_forecast_hourly.pull_da_cutoff_vintages
+    val_col = "forecast_generation_mw"
+    src_l = f"meteo_{kind}_{region.lower()}_snap_l"
+    src_d = f"meteo_{kind}_{region.lower()}_snap_da"
 
-    latest = _safe_pull(src_l, latest_fn, {}, **cache_kwargs)
-    da = _safe_pull(src_d, da_fn, {}, **cache_kwargs)
+    latest = _safe_pull(src_l, latest_fn, {"source": kind, "region": region}, **cache_kwargs)
+    da = _safe_pull(src_d, da_fn, {"source": kind, "region": region}, **cache_kwargs)
 
     frames: list[pd.DataFrame] = []
     if not latest.empty:
-        df_l = latest.copy(); df_l["vintage_label"] = "Latest"; frames.append(df_l)
+        df_l = latest.copy()
+        df_l["vintage_label"] = "Latest"
+        frames.append(df_l)
     if not da.empty:
         frames.append(da.copy())
     if not frames:
@@ -1035,35 +975,35 @@ def _empty_html(msg: str) -> str:
 
 _STYLE = """
 <style>
-.rs-wrap { padding: 8px; }
-.rs-meta { margin-bottom: 10px; color: #9eb4d3; font-size: 11px; font-family: monospace; }
-.rs-tw { overflow-x: auto; border: 1px solid #2a3f60; border-radius: 8px; }
-.rs-t {
+.ms-wrap { padding: 8px; }
+.ms-meta { margin-bottom: 10px; color: #9eb4d3; font-size: 11px; font-family: monospace; }
+.ms-tw { overflow-x: auto; border: 1px solid #2a3f60; border-radius: 8px; }
+.ms-t {
   width: 100%; border-collapse: collapse;
   font-size: 11px; font-family: monospace;
 }
-.rs-t th {
+.ms-t th {
   position: sticky; top: 0; background: #16263d; color: #e6efff;
   border-bottom: 1px solid #2a3f60; padding: 6px 8px;
   text-align: right; white-space: nowrap;
 }
-.rs-t th.metric, .rs-t th.unit { text-align: left; }
-.rs-t td {
+.ms-t th.metric, .ms-t th.unit { text-align: left; }
+.ms-t td {
   padding: 5px 8px; border-bottom: 1px solid #1f334f;
   text-align: right; color: #dbe7ff; white-space: nowrap;
 }
-.rs-t td.metric { text-align: left; color: #cfe0ff; font-weight: 700; }
-.rs-t td.unit { text-align: left; color: #8aa5ca; }
-.rs-t tr:nth-child(even) td { background: rgba(18, 32, 50, 0.45); }
-.rs-t td.pos { color: #34d399; }
-.rs-t td.neg { color: #f87171; }
-.rs-t td.zero { color: #9eb4d3; }
-.rs-toggle {
+.ms-t td.metric { text-align: left; color: #cfe0ff; font-weight: 700; }
+.ms-t td.unit { text-align: left; color: #8aa5ca; }
+.ms-t tr:nth-child(even) td { background: rgba(18, 32, 50, 0.45); }
+.ms-t td.pos { color: #34d399; }
+.ms-t td.neg { color: #f87171; }
+.ms-t td.zero { color: #9eb4d3; }
+.ms-toggle {
   padding: 4px 12px; font-size: 11px; font-weight: 600;
   background: #101d31; color: #9eb4d3; border: 1px solid #2a3f60;
   border-radius: 4px; cursor: pointer; font-family: inherit;
   margin-bottom: 6px;
 }
-.rs-toggle:hover { background: #1a2b44; color: #dbe7ff; }
+.ms-toggle:hover { background: #1a2b44; color: #dbe7ff; }
 </style>
 """

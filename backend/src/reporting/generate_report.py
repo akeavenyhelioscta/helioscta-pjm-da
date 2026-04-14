@@ -34,8 +34,7 @@ from src.reporting.fragments import solar_forecast_vintage_combined as solar_for
 from src.reporting.fragments import wind_forecast_vintage_combined as wind_forecast_vintage_combined_fragments
 from src.reporting.fragments import net_load_forecast_vintage_combined as net_load_forecast_vintage_combined_fragments
 from src.reporting.fragments import like_day_forecast_results as forecast_results_fragments
-from src.reporting.fragments import like_day_forecast_market_adjusted as market_adjusted_forecast_fragments
-from src.reporting.fragments import like_day_forecast_regression_adjusted as regression_adjusted_forecast_fragments
+from src.reporting.fragments import like_day_forecast_ice_level as ice_level_fragments
 from src.reporting.fragments import fuel_mix as fuel_mix_fragments
 from src.reporting.fragments import lmp_history as lmp_history_fragments
 from src.reporting.fragments import outages_forecast_rto as outages_forecast_rto_fragments
@@ -48,6 +47,7 @@ from src.reporting.fragments import balday as balday_fragments
 from src.reporting.fragments import regional_spark_spreads as regional_spark_spreads_fragments
 from src.reporting.fragments import tie_flows as tie_flows_fragments
 from src.reporting.fragments import pjm_rto_forecast_snapshot as pjm_rto_forecast_snapshot_fragments
+from src.reporting.fragments import meteologica_rto_forecast_snapshot as meteologica_rto_forecast_snapshot_fragments
 from src.reporting.master_report import build_master
 from src.utils.azure_blob_storage_utils import AzureBlobStorageClient
 
@@ -62,19 +62,25 @@ FRAGMENT_REGISTRY = {
 
     # ────── DA MODEL ────────────────────────────────────────────────
     "like_day_forecast_results": ("Like Day Model", forecast_results_fragments.build_fragments),
-    # "like_day_forecast_market_adjusted": ("Market-Adjusted Forecast", market_adjusted_forecast_fragments.build_fragments),
-    # "like_day_forecast_regression_adjusted": ("Regression-Adjusted Forecast", regression_adjusted_forecast_fragments.build_fragments),
+    "like_day_forecast_ice_level": ("Like Day ICE Level Adjusted", ice_level_fragments.build_fragments),
     "meteologica_da_price_forecast": ("Meteologica DA Price Forecast", meteologica_da_price_forecast_fragments.build_fragments),
     # "like_day_forecast_strip": ("Strip Forecast", strip_forecast_fragments.build_fragments),
 
     # ────── RT BALDAY ────────────────────────────────────────────
     # "balday": ("Bal Day", balday_fragments.build_fragments),
 
-    # ────── LOAD FORECASTS ────────────────────────────────────────
+    # ────── FORECASTS ────────────────────────────────────────────
     "load_forecast_vintage_combined": ("Load Forecast Vintages", load_forecast_vintage_combined_fragments.build_fragments),
-    "pjm_rto_forecast_snapshot": ("PJM RTO Forecast Snapshot", pjm_rto_forecast_snapshot_fragments.build_fragments),
     "solar_forecast_vintage_combined": ("Solar Forecast Vintages", solar_forecast_vintage_combined_fragments.build_fragments),
     "wind_forecast_vintage_combined": ("Wind Forecast Vintages", wind_forecast_vintage_combined_fragments.build_fragments),
+    "pjm_rto_forecast_snapshot": ("PJM RTO Forecast Snapshot", pjm_rto_forecast_snapshot_fragments.build_fragments),
+    "pjm_west_forecast_snapshot": ("PJM Western Forecast Snapshot", pjm_rto_forecast_snapshot_fragments.build_fragments_west),
+    "pjm_midatl_forecast_snapshot": ("PJM Mid-Atlantic Forecast Snapshot", pjm_rto_forecast_snapshot_fragments.build_fragments_midatl),
+    "pjm_south_forecast_snapshot": ("PJM Southern Forecast Snapshot", pjm_rto_forecast_snapshot_fragments.build_fragments_south),
+    "meteologica_rto_forecast_snapshot": ("Meteologica RTO Forecast Snapshot", meteologica_rto_forecast_snapshot_fragments.build_fragments),
+    "meteologica_west_forecast_snapshot": ("Meteologica Western Forecast Snapshot", meteologica_rto_forecast_snapshot_fragments.build_fragments_west),
+    "meteologica_midatl_forecast_snapshot": ("Meteologica Mid-Atlantic Forecast Snapshot", meteologica_rto_forecast_snapshot_fragments.build_fragments_midatl),
+    "meteologica_south_forecast_snapshot": ("Meteologica Southern Forecast Snapshot", meteologica_rto_forecast_snapshot_fragments.build_fragments_south),
     # "net_load_forecast_vintage_combined": ("Net Load Forecast Vintages", net_load_forecast_vintage_combined_fragments.build_fragments),
     # "regional_spark_spreads": ("Regional Spark Spreads", regional_spark_spreads_fragments.build_fragments),
     "fuel_mix": ("Fuel Mix", fuel_mix_fragments.build_fragments),

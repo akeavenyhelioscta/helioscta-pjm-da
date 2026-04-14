@@ -1,9 +1,8 @@
 """Combined load forecast vintage dashboard — RTO + WEST + MIDATL + SOUTH.
 
-For each region shows three charts:
+For each region shows two charts:
   1. PJM vintage overlay (5 vintages)
   2. Meteologica vintage overlay (5 vintages + Euro ensemble band)
-  3. PJM vs Meteologica diff per vintage (PJM − Meteo MW)
 
 Vintages: Latest, DA Cutoff, DA -12h, DA -24h, DA -48h.
 
@@ -129,7 +128,6 @@ def build_fragments(
     for region in REGIONS:
         chart_ids.append(f"{_PREFIX}Pjm{region}")
         chart_ids.append(f"{_PREFIX}Meteo{region}")
-        chart_ids.append(f"{_PREFIX}Diff{region}")
 
     fragments: list = []
 
@@ -159,14 +157,14 @@ def build_fragments(
             if len(df_common) > 0:
                 chart = _build_vintage_chart(
                     pjm_chart_id, df_common, None,
-                    f"PJM {label} — Vintage Overlay",
+                    f"PJM {label}",
                 )
-                fragments.append((f"PJM {label} Vintage Overlay", chart, None))
+                fragments.append((f"PJM {label}", chart, None))
             else:
-                fragments.append((f"PJM {label} Vintage Overlay",
+                fragments.append((f"PJM {label}",
                                   _empty(f"No common intervals for PJM {label}."), None))
         else:
-            fragments.append((f"PJM {label} Vintage Overlay",
+            fragments.append((f"PJM {label}",
                               _empty(f"No PJM vintage data for {label}."), None))
 
         # Meteologica chart
@@ -182,37 +180,16 @@ def build_fragments(
                     prepped_euro = _prep_euro(df_euro)
                 chart = _build_vintage_chart(
                     meteo_chart_id, df_common, prepped_euro,
-                    f"Meteologica {label} — Vintage Overlay",
+                    f"Meteologica {label}",
                 )
-                fragments.append((f"Meteologica {label} Vintage Overlay", chart, None))
+                fragments.append((f"Meteologica {label}", chart, None))
             else:
-                fragments.append((f"Meteologica {label} Vintage Overlay",
+                fragments.append((f"Meteologica {label}",
                                   _empty(f"No common intervals for Meteologica {label}."), None))
         else:
-            fragments.append((f"Meteologica {label} Vintage Overlay",
+            fragments.append((f"Meteologica {label}",
                               _empty(f"No Meteologica vintage data for {label}."), None))
 
-        # PJM vs Meteologica diff chart
-        diff_chart_id = f"{_PREFIX}Diff{region}"
-        df_pjm_raw = vintage_data[region]["pjm"]
-        df_meteo_raw = vintage_data[region]["meteologica"]
-        has_both = (
-            df_pjm_raw is not None and len(df_pjm_raw) > 0
-            and df_meteo_raw is not None and len(df_meteo_raw) > 0
-        )
-        if has_both:
-            chart = _build_diff_chart(
-                diff_chart_id, df_pjm_raw, df_meteo_raw,
-                f"PJM vs Meteologica {label} — Diff by Vintage",
-            )
-            if chart is not None:
-                fragments.append((f"PJM vs Meteologica {label} Diff", chart, None))
-            else:
-                fragments.append((f"PJM vs Meteologica {label} Diff",
-                                  _empty(f"No common intervals for diff in {label}."), None))
-        else:
-            fragments.append((f"PJM vs Meteologica {label} Diff",
-                              _empty(f"Need both PJM and Meteologica data for {label} diff."), None))
 
     return fragments
 

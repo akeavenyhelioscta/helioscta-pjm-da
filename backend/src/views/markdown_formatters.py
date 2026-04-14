@@ -144,7 +144,348 @@ def format_lmp_7day(vm: dict) -> str:
     return "\n".join(parts)
 
 
+def format_lgbm_qr_forecast_results(vm: dict) -> str:
+    """Format the LightGBM QR single-day forecast view model as markdown."""
+    if "error" in vm:
+        return f"# Error\n\n{vm['error']}"
+
+    parts: list[str] = []
+    mi = vm.get("model_info", {})
+    best = mi.get("best_params", {})
+    parts.append(
+        f"# LightGBM QR Forecast - {vm.get('forecast_date', '?')}"
+        f" (n_estimators={best.get('n_estimators', '?')},"
+        f" max_depth={best.get('max_depth', '?')},"
+        f" learning_rate={best.get('learning_rate', '?')},"
+        f" {mi.get('n_features', '?')} features,"
+        f" {mi.get('n_train_samples', '?')} samples)"
+    )
+
+    summary = vm.get("summary", {})
+    bands_list = vm.get("bands", [])
+    bands = {b["band"]: b for b in bands_list if "band" in b}
+    parts.append("\n## Summary ($/MWh)")
+    headers = ["Period", "Fcst", "Actual", "Error", "P10", "P25", "P50", "P75", "P90"]
+    rows = []
+    for pkey, label in [("on_peak", "OnPeak"), ("off_peak", "OffPeak"), ("flat", "Flat")]:
+        s = summary.get(pkey, {})
+        row = [
+            label,
+            _fmt2(s.get("forecast")),
+            _fmt2(s.get("actual")),
+            _fmt2(s.get("error")),
+        ]
+        for b in ["P10", "P25", "P50", "P75", "P90"]:
+            row.append(_fmt2(bands.get(b, {}).get(label)))
+        rows.append(row)
+    parts.append(_table(headers, rows))
+
+    hourly = vm.get("hourly", [])
+    if hourly:
+        parts.append("\n## Hourly Detail ($/MWh)")
+        has_act = any(hr.get("actual") is not None for hr in hourly)
+        headers = ["HE", "Period", "Fcst"]
+        if has_act:
+            headers.extend(["Actual", "Error"])
+        headers.extend(["P10", "P90"])
+        rows = []
+        for hr in hourly:
+            row = [
+                hr["hour"],
+                "on" if hr["period"] == "on_peak" else "off",
+                _fmt2(hr.get("forecast")),
+            ]
+            if has_act:
+                row.extend([_fmt2(hr.get("actual")), _fmt2(hr.get("error"))])
+            q = hr.get("quantiles", {})
+            row.extend([_fmt2(q.get("P10")), _fmt2(q.get("P90"))])
+            rows.append(row)
+        parts.append(_table(headers, rows))
+
+    importances = mi.get("feature_importances", [])
+    if importances:
+        parts.append("\n## Top Features (by gain)")
+        headers = ["Rank", "Feature", "Importance"]
+        rows = [[i + 1, f["feature"], _fmt(f["importance"], 4)] for i, f in enumerate(importances)]
+        parts.append(_table(headers, rows))
+
+    shap_importances = mi.get("shap_importances", [])
+    if shap_importances:
+        parts.append("\n## Top SHAP Features (P50)")
+        headers = ["Rank", "Feature", "Importance"]
+        rows = [[i + 1, f["feature"], _fmt(f["importance"], 4)] for i, f in enumerate(shap_importances)]
+        parts.append(_table(headers, rows))
+
+    return "\n".join(parts)
+
+
+def format_lgbm_qr_strip_forecast_results(vm: dict) -> str:
+    """Format the LightGBM QR strip forecast view model as markdown."""
+    if "error" in vm:
+        return f"# Error\n\n{vm['error']}"
+
+    parts: list[str] = []
+    n_days = len(vm.get("forecast_dates", []))
+    parts.append(
+        f"# LightGBM QR Strip Forecast - ref: {vm.get('reference_date', '?')}"
+        f" ({n_days} days)"
+    )
+
+    day_type_models = vm.get("model_info", {}).get("day_type_models", {})
+    if day_type_models:
+        parts.append("\n## Day-Type Models")
+        headers = [
+            "Day Type",
+            "n_estimators",
+            "max_depth",
+            "learning_rate",
+            "Features",
+            "Train Samples",
+            "Train End",
+        ]
+        rows = []
+        for day_type in sorted(day_type_models.keys()):
+            info = day_type_models[day_type]
+            bp = info.get("best_params", {})
+            rows.append([
+                day_type,
+                bp.get("n_estimators", "-"),
+                bp.get("max_depth", "-"),
+                _fmt(bp.get("learning_rate"), 3),
+                info.get("n_features", "-"),
+                info.get("n_train_samples", "-"),
+                info.get("train_end", "-"),
+            ])
+        parts.append(_table(headers, rows))
+
+    strip = vm.get("strip", [])
+    if strip:
+        parts.append("\n## Strip Summary ($/MWh)")
+        headers = [
+            "Date",
+            "D+",
+            "OnPk Fcst",
+            "OnPk P10",
+            "OnPk P90",
+            "OffPk Fcst",
+            "OffPk P10",
+            "OffPk P90",
+            "Flat Fcst",
+        ]
+        rows = []
+        for d in strip:
+            s = d.get("summary", {})
+            b = d.get("bands", {})
+            rows.append([
+                d["date"],
+                d.get("offset", "-"),
+                _fmt2(s.get("on_peak", {}).get("forecast")),
+                _fmt2(b.get("P10", {}).get("on_peak")),
+                _fmt2(b.get("P90", {}).get("on_peak")),
+                _fmt2(s.get("off_peak", {}).get("forecast")),
+                _fmt2(b.get("P10", {}).get("off_peak")),
+                _fmt2(b.get("P90", {}).get("off_peak")),
+                _fmt2(s.get("flat", {}).get("forecast")),
+            ])
+        parts.append(_table(headers, rows))
+
+    for d in strip:
+        hourly = d.get("hourly", [])
+        if not hourly:
+            continue
+        label = f"D+{d.get('offset', '?')}: {d['date']}"
+        has_bands = "p10" in hourly[0]
+        parts.append(f"\n## {label} - Hourly Detail ($/MWh)")
+        headers = ["HE", "Period", "Fcst"]
+        if has_bands:
+            headers.extend(["P10", "P90"])
+        rows = []
+        for hr in hourly:
+            row = [
+                hr["hour"],
+                "on" if hr["period"] == "on_peak" else "off",
+                _fmt2(hr.get("forecast")),
+            ]
+            if has_bands:
+                row.extend([_fmt2(hr.get("p10")), _fmt2(hr.get("p90"))])
+            rows.append(row)
+        parts.append(_table(headers, rows))
+
+    return "\n".join(parts)
+
+
 # ── Forecast Results ────────────────────────────────────────────────
+
+
+def format_supply_stack_forecast_results(vm: dict) -> str:
+    """Format the supply stack forecast results view model as markdown."""
+    if "error" in vm:
+        return f"# Error\n\n{vm['error']}"
+
+    parts: list[str] = []
+    cfg = vm.get("model_config", {})
+    parts.append(
+        f"# Supply Stack Forecast - {vm.get('forecast_date', '?')}"
+        f" (region={cfg.get('region', '?')}, preset={cfg.get('region_preset') or 'none'})"
+    )
+    if not vm.get("has_actuals"):
+        parts.append("\n*Actuals not yet available.*")
+
+    summary = vm.get("summary", {})
+    if summary:
+        parts.append("\n## Period Summary ($/MWh)")
+        headers = ["Period", "Forecast", "Actual", "Error"]
+        rows = []
+        for pkey, plabel in [("on_peak", "On-Peak"), ("off_peak", "Off-Peak"), ("flat", "Flat")]:
+            s = summary.get(pkey, {})
+            rows.append([
+                plabel,
+                _fmt2(s.get("forecast")),
+                _fmt2(s.get("actual")),
+                _fmt2(s.get("error")),
+            ])
+        parts.append(_table(headers, rows))
+
+    hourly = vm.get("hourly", [])
+    if hourly:
+        parts.append("\n## Hourly Detail")
+        has_act = any(hr.get("actual") is not None for hr in hourly)
+        headers = [
+            "HE",
+            "Pd",
+            "Fcst",
+            "MargFuel",
+            "MargHR",
+            "ResvMW",
+            "Stack%",
+            "NetLoad",
+            "Gas",
+            "P10",
+            "P90",
+        ]
+        if has_act:
+            headers.insert(3, "Actual")
+            headers.insert(4, "Error")
+
+        rows = []
+        for hr in hourly:
+            q = hr.get("quantiles", {})
+            row = [
+                hr["hour"],
+                "on" if hr["period"] == "on_peak" else "off",
+                _fmt2(hr.get("forecast")),
+            ]
+            if has_act:
+                row.extend([_fmt2(hr.get("actual")), _fmt2(hr.get("error"))])
+            row.extend(
+                [
+                    hr.get("marginal_fuel", "-"),
+                    _fmt(hr.get("marginal_heat_rate"), 3),
+                    _fmt2(hr.get("reserve_margin_mw")),
+                    _fmt2(hr.get("stack_position_pct")),
+                    _fmt2(hr.get("net_load_mw")),
+                    _fmt(hr.get("gas_price_usd_mmbtu"), 4),
+                    _fmt2(q.get("P10")),
+                    _fmt2(q.get("P90")),
+                ]
+            )
+            rows.append(row)
+        parts.append(_table(headers, rows))
+
+    bands = vm.get("bands", [])
+    if bands:
+        parts.append("\n## Quantile Bands ($/MWh)")
+        headers = ["Band"] + [f"HE{h}" for h in range(1, 25)] + ["OnPeak", "OffPeak", "Flat"]
+        rows = []
+        for b in bands:
+            row = [b.get("band")]
+            for h in range(1, 25):
+                row.append(_fmt2(b.get(f"HE{h}")))
+            row.extend([_fmt2(b.get("OnPeak")), _fmt2(b.get("OffPeak")), _fmt2(b.get("Flat"))])
+            rows.append(row)
+        parts.append(_table(headers, rows))
+
+    metrics = vm.get("metrics", {})
+    if metrics:
+        parts.append("\n## Error Metrics")
+        parts.append(f"- MAE: {_fmt2(metrics.get('mae'))}")
+        parts.append(f"- RMSE: {_fmt2(metrics.get('rmse'))}")
+        parts.append(f"- MAPE: {_fmt2(metrics.get('mape'))}%")
+
+    return "\n".join(parts)
+
+
+# ── Validation Results ─────────────────────────────────────────────
+
+
+def format_supply_stack_validation_results(vm: dict) -> str:
+    """Format supply stack validation view model as markdown."""
+    if "error" in vm:
+        return f"# Error\n\n{vm['error']}"
+
+    parts: list[str] = []
+    status = vm.get("overall_status", "?").upper()
+    parts.append(
+        f"# Supply Stack Validation — {vm.get('forecast_date', '?')}"
+        f" [{status}: {vm.get('checks_passed', 0)} pass, {vm.get('checks_failed', 0)} fail]"
+    )
+
+    # Input quality
+    input_checks = vm.get("input_quality", [])
+    if input_checks:
+        parts.append("\n## Input Quality")
+        headers = ["Check", "Status", "Detail"]
+        rows = [[c["check"], c["status"], c.get("detail", "")] for c in input_checks]
+        parts.append(_table(headers, rows))
+
+    # Stack invariants
+    stack_checks = vm.get("stack_invariants", [])
+    if stack_checks:
+        parts.append("\n## Stack Invariants")
+        headers = ["Check", "Status", "Detail"]
+        rows = [[c["check"], c["status"], c.get("detail", "")] for c in stack_checks]
+        parts.append(_table(headers, rows))
+
+    # Sensitivity
+    sensitivity = vm.get("sensitivity", [])
+    if sensitivity:
+        parts.append("\n## Sensitivity Analysis ($/MWh delta from base)")
+        headers = ["Scenario", "On-Peak", "Off-Peak", "Flat"]
+        rows = []
+        for s in sensitivity:
+            rows.append([
+                s.get("scenario", "?"),
+                _fmt2(s.get("on_peak_delta")),
+                _fmt2(s.get("off_peak_delta")),
+                _fmt2(s.get("flat_delta")),
+            ])
+        parts.append(_table(headers, rows))
+
+    # Forecast summary
+    summary = vm.get("forecast_summary", {})
+    if summary and "error" not in summary:
+        parts.append("\n## Forecast Summary")
+        parts.append(f"- Date: {summary.get('forecast_date', '?')}")
+        parts.append(f"- Actuals available: {summary.get('has_actuals', False)}")
+        parts.append(f"- On-Peak avg: {_fmt2(summary.get('on_peak_avg_price'))} $/MWh")
+        parts.append(f"- Off-Peak avg: {_fmt2(summary.get('off_peak_avg_price'))} $/MWh")
+        parts.append(f"- Flat avg: {_fmt2(summary.get('flat_avg_price'))} $/MWh")
+
+        fuel_dist = summary.get("marginal_fuel_distribution", {})
+        if fuel_dist:
+            parts.append("\n### Marginal Fuel Distribution")
+            headers = ["Fuel", "Hours (%)"]
+            rows = [[fuel, f"{pct}%"] for fuel, pct in sorted(fuel_dist.items(), key=lambda x: -x[1])]
+            parts.append(_table(headers, rows))
+
+        metrics = summary.get("metrics")
+        if metrics:
+            parts.append("\n### Error Metrics")
+            parts.append(f"- MAE: {_fmt2(metrics.get('mae'))}")
+            parts.append(f"- RMSE: {_fmt2(metrics.get('rmse'))}")
+            parts.append(f"- MAPE: {_fmt2(metrics.get('mape'))}%")
+
+    return "\n".join(parts)
 
 
 def format_like_day_forecast_results(vm: dict) -> str:
@@ -761,13 +1102,37 @@ def format_outages_forecast_vintages(vm: dict) -> str:
 def format_ice_power_intraday(vm: dict) -> str:
     """Format the ICE power intraday view model as markdown.
 
-    Two sections: daily settlement history and current-session intraday tape.
+    Sections: session summary, settlement history, and (optional) intraday tape.
     """
     if "error" in vm:
         return f"# Error\n\n{vm['error']}"
 
     parts: list[str] = []
     parts.append("# ICE PJM Power — Settlements & Intraday Tape")
+
+    # --- Session Summary (cross-product comparison) ---
+    summary = vm.get("session_summary")
+    if summary:
+        parts.append("\n## Session Summary")
+        # Collect all product names across all delivery dates
+        all_products: list[str] = []
+        for entry in summary:
+            for p in entry.get("products", {}):
+                if p not in all_products:
+                    all_products.append(p)
+        all_products.sort()
+
+        headers = ["Delivery"] + [f"{p} VWAP" for p in all_products] + [f"{p} Vol" for p in all_products]
+        rows = []
+        for entry in summary:
+            prods = entry.get("products", {})
+            row = [entry["delivery_date"]]
+            for p in all_products:
+                row.append(_fmt2(prods[p]["vwap"]) if p in prods else "-")
+            for p in all_products:
+                row.append(_fmt0(prods[p]["volume"]) if p in prods else "-")
+            rows.append(row)
+        parts.append(_table(headers, rows))
 
     # --- Settlement History ---
     settles = vm.get("settlements")
@@ -858,11 +1223,17 @@ def format_ice_power_intraday(vm: dict) -> str:
                 )
                 snaps = session.get("snapshots", [])
                 if snaps:
+                    # Handle compressed rows (time_start/time_end) and
+                    # regular rows (time_et)
                     headers = ["Time ET", "Bid", "Ask", "Spread", "Last", "VWAP", "Vol", "Chg"]
                     rows = []
                     for s in snaps:
+                        if "time_start" in s:
+                            time_label = f"{s['time_start']}–{s['time_end']}"
+                        else:
+                            time_label = s["time_et"]
                         rows.append([
-                            s["time_et"],
+                            time_label,
                             _fmt2(s.get("bid")),
                             _fmt2(s.get("ask")),
                             _fmt2(s.get("spread")),
@@ -1033,7 +1404,8 @@ def format_lasso_qr_forecast_results(vm: dict) -> str:
             ]
             if has_act:
                 row.extend([_fmt2(hr.get("actual")), _fmt2(hr.get("error"))])
-            row.extend([_fmt2(hr.get("p10")), _fmt2(hr.get("p90"))])
+            q = hr.get("quantiles", {})
+            row.extend([_fmt2(q.get("P10")), _fmt2(q.get("P90"))])
             rows.append(row)
         parts.append(_table(headers, rows))
 
@@ -1233,5 +1605,60 @@ def format_regional_congestion(vm: dict) -> str:
             h, r = _pivot_hourly(rt_hourly, value_key="cong", decimals=2)
             if r:
                 parts.append(_table(h, r))
+
+    return "\n".join(parts)
+
+
+# ── Gas Prices ────────────────────────────────────────────────────
+
+
+def format_gas_prices(vm: dict) -> str:
+    """Format the gas prices view model as markdown.
+
+    Compact table of daily next-day cash gas with DoD changes and basis.
+    """
+    if "error" in vm:
+        return f"# Error\n\n{vm['error']}"
+
+    parts: list[str] = []
+    dr = vm.get("date_range", {})
+    parts.append(f"# ICE Gas Prices — Next-Day Cash ({dr.get('start', '?')} to {dr.get('end', '?')})")
+
+    hubs = vm.get("hubs", [])
+    daily = vm.get("daily_prices", [])
+    if not daily:
+        parts.append("\nNo data.")
+        return "\n".join(parts)
+
+    # Build headers: Date | M3 | HH | Z5S | AGT | M3 DoD | HH DoD | M3-HH | Z5S-HH
+    headers = ["Date"] + hubs
+    headers += [f"{h} DoD" for h in hubs]
+    headers += [f"{h}-HH" for h in hubs if h != "HH"]
+
+    rows = []
+    for entry in daily:
+        row = [entry["date"]]
+        for h in hubs:
+            row.append(_fmt(entry.get(h), decimals=3))
+        for h in hubs:
+            row.append(_fmt(entry.get(f"{h}_dod"), decimals=3))
+        for h in hubs:
+            if h != "HH":
+                row.append(_fmt(entry.get(f"{h}-HH"), decimals=3))
+        rows.append(row)
+
+    parts.append(_table(headers, rows))
+
+    # Latest summary line
+    latest = vm.get("latest", {})
+    if latest:
+        summary_parts = []
+        for h in hubs:
+            val = latest.get(h)
+            dod = latest.get(f"{h}_dod")
+            if val is not None:
+                dod_str = f" ({'+' if dod and dod > 0 else ''}{_fmt(dod, 3)})" if dod is not None else ""
+                summary_parts.append(f"**{h}** ${_fmt(val, 3)}{dod_str}")
+        parts.append(f"\n**Latest ({latest.get('date', '?')}):** " + " | ".join(summary_parts))
 
     return "\n".join(parts)
