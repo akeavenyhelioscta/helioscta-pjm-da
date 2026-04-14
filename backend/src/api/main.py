@@ -17,11 +17,13 @@ from fastapi_mcp import FastApiMCP
 
 from src.like_day_forecast import configs
 from src.like_day_forecast.pipelines.forecast import run as run_forecast
-from src.like_day_forecast.pipelines.market_adjusted_forecast import run as run_adjusted_forecast
-from src.like_day_forecast.pipelines.regression_adjusted_forecast import run as run_regression_forecast
-from src.data import outages_actual_daily, outages_forecast_daily, load_forecast_vintages, solar_forecast_vintages, wind_forecast_vintages, lmps_hourly, fuel_mix_hourly, transmission_outages, ice_power_intraday, meteologica_da_price_forecast
+from src.supply_stack_model.configs import SupplyStackConfig
+from src.supply_stack_model.pipelines.forecast import run as run_supply_stack_forecast
+from src.data import outages_actual_daily, outages_forecast_daily, load_forecast_vintages, solar_forecast_vintages, wind_forecast_vintages, lmps_hourly, fuel_mix_hourly, transmission_outages, ice_power_intraday, meteologica_da_price_forecast, gas_prices
 from src.utils.cache_utils import pull_with_cache
 from src.views.like_day_forecast_results import build_view_model as forecast_view_model
+from src.views.supply_stack_forecast_results import build_view_model as supply_stack_view_model
+from src.views.supply_stack_validation_results import build_validation_view_model as supply_stack_validation_vm
 from src.views.like_day_strip_forecast_results import build_view_model as strip_view_model
 from src.views.outage_term_bible import build_view_model as outage_view_model
 from src.views.load_forecast_vintages import build_view_model as load_forecast_view_model
@@ -33,6 +35,7 @@ from src.views.outages_forecast_vintages import build_view_model as outage_fcst_
 from src.views.ice_power_intraday import build_view_model as ice_power_view_model
 from src.views.meteologica_da_forecast import build_view_model as meteo_da_view_model
 from src.views.regional_congestion import build_view_model as regional_congestion_view_model
+from src.views.gas_prices import build_view_model as gas_prices_view_model
 from src.views.markdown_formatters import (
     format_lmp_7day,
     format_like_day_forecast_results,
@@ -48,6 +51,11 @@ from src.views.markdown_formatters import (
     format_regional_congestion,
     format_lasso_qr_forecast_results,
     format_lasso_qr_strip_forecast_results,
+    format_lgbm_qr_forecast_results,
+    format_lgbm_qr_strip_forecast_results,
+    format_supply_stack_forecast_results,
+    format_supply_stack_validation_results,
+    format_gas_prices,
 )
 
 
@@ -112,171 +120,6 @@ def get_like_day_forecast_results(
     return PlainTextResponse(content=format_like_day_forecast_results(vm), media_type="text/markdown")
 
 
-@app.get("/views/market_adjusted_forecast")
-def get_market_adjusted_forecast(
-    market_onpeak: float = Query(..., description="ICE or broker on-peak price anchor ($/MWh)"),
-    market_offpeak: float | None = Query(None, description="Off-peak anchor ($/MWh). If omitted, shifted by same delta as on-peak."),
-    forecast_date: str | None = Query(None, description="YYYY-MM-DD, defaults to tomorrow"),
-    format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
-):
-    """Rescale the like-day forecast hourly shape to a market-observed price level."""
-    result = run_adjusted_forecast(
-        market_onpeak=market_onpeak,
-        market_offpeak=market_offpeak,
-        forecast_date=forecast_date,
-        config=configs.ScenarioConfig(forecast_date=forecast_date),
-        cache_dir=configs.CACHE_DIR,
-        cache_enabled=configs.CACHE_ENABLED,
-        cache_ttl_hours=configs.CACHE_TTL_HOURS,
-        force_refresh=configs.FORCE_CACHE_REFRESH,
-    )
-    vm = forecast_view_model(result)
-    if format == OutputFormat.json:
-        return {**vm, "adjustment": result.get("adjustment")}
-    md = format_like_day_forecast_results(vm)
-    adj = result.get("adjustment", {})
-    header = (
-        f"# Market-Adjusted Forecast\n\n"
-        f"**Anchor:** On-Peak ${adj.get('market_onpeak', 0):.2f} | "
-        f"Off-Peak ${adj.get('market_offpeak', 0):.2f}\n"
-        f"**Model base:** On-Peak ${adj.get('base_onpeak', 0):.2f} | "
-        f"Off-Peak ${adj.get('base_offpeak', 0):.2f}\n"
-        f"**Delta:** On-Peak {adj.get('onpeak_delta', 0):+.2f} | "
-        f"Off-Peak {adj.get('offpeak_delta', 0):+.2f}\n\n"
-    )
-    return PlainTextResponse(content=header + md, media_type="text/markdown")
-
-
-@app.get("/views/regression_adjusted_forecast")
-def get_regression_adjusted_forecast(
-    forecast_date: str | None = Query(None, description="YYYY-MM-DD, defaults to tomorrow"),
-    exclude_dates: str | None = Query(None, description="Comma-separated YYYY-MM-DD dates to exclude from analog pool"),
-    exclude_holidays: bool = Query(True, description="Exclude NERC holidays from analog pool when target is not a holiday"),
-    format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
-):
-    """Apply regression correction based on fundamental deltas vs analog-weighted averages."""
-    parsed_exclude = [d.strip() for d in exclude_dates.split(",") if d.strip()] if exclude_dates else []
-    result = run_regression_forecast(
-        forecast_date=forecast_date,
-        config=configs.ScenarioConfig(
-            forecast_date=forecast_date,
-            exclude_dates=parsed_exclude,
-            exclude_holidays=exclude_holidays,
-        ),
-        cache_dir=configs.CACHE_DIR,
-        cache_enabled=configs.CACHE_ENABLED,
-        cache_ttl_hours=configs.CACHE_TTL_HOURS,
-        force_refresh=configs.FORCE_CACHE_REFRESH,
-    )
-    vm = forecast_view_model(result)
-    if format == OutputFormat.json:
-        adj = result.get("adjustment", {})
-        deltas_json = [
-            {
-                "factor": d.label, "unit": d.unit,
-                "today": d.today_value, "analog_avg": d.analog_avg,
-                "delta": d.delta,
-                "adj_onpeak": d.adj_onpeak, "adj_offpeak": d.adj_offpeak,
-            }
-            for d in result.get("deltas", [])
-        ]
-        return {**vm, "adjustment": adj, "deltas": deltas_json}
-    # Markdown
-    adj = result.get("adjustment", {})
-    deltas = result.get("deltas", [])
-    header = (
-        f"# Regression-Adjusted Forecast\n\n"
-        f"**Total adjustment:** On-Peak {adj.get('total_onpeak', 0):+.2f} | "
-        f"Off-Peak {adj.get('total_offpeak', 0):+.2f}\n"
-        f"**Model:** On-Peak ${adj.get('base_onpeak', 0):.2f} | "
-        f"Off-Peak ${adj.get('base_offpeak', 0):.2f}\n"
-        f"**Adjusted:** On-Peak ${adj.get('adj_onpeak', 0):.2f} | "
-        f"Off-Peak ${adj.get('adj_offpeak', 0):.2f}\n\n"
-        f"## Fundamental Deltas\n"
-        f"| Factor | Today | Analog Avg | Delta | Adj OnPk | Adj OffPk |\n"
-        f"|--------|-------|-----------|-------|----------|----------|\n"
-    )
-    for d in deltas:
-        if d.unit == "MW":
-            header += (f"| {d.label} | {d.today_value:,.0f} MW | {d.analog_avg:,.0f} MW | "
-                       f"{d.delta:+,.0f} | {d.adj_onpeak:+.2f} | {d.adj_offpeak:+.2f} |\n")
-        else:
-            header += (f"| {d.label} | ${d.today_value:.2f} | ${d.analog_avg:.2f} | "
-                       f"{d.delta:+.2f} | {d.adj_onpeak:+.2f} | {d.adj_offpeak:+.2f} |\n")
-    header += f"| **Total** | | | | **{adj.get('total_onpeak', 0):+.2f}** | **{adj.get('total_offpeak', 0):+.2f}** |\n\n"
-    md = format_like_day_forecast_results(vm)
-    return PlainTextResponse(content=header + md, media_type="text/markdown")
-
-
-@app.get("/views/scenario_forecast")
-def get_scenario_forecast(
-    scenarios: str = Query(
-        "holiday,high_outage_stress,low_wind",
-        description="Comma-separated scenario preset names (e.g., 'holiday,low_wind,bull,bear')",
-    ),
-    forecast_date: str | None = Query(None, description="YYYY-MM-DD, defaults to tomorrow"),
-    exclude_dates: str | None = Query(None, description="Comma-separated YYYY-MM-DD dates to exclude from analog pool"),
-    exclude_holidays: bool = Query(True, description="Exclude NERC holidays from analog pool when target is not a holiday"),
-    format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
-):
-    """Run multiple what-if scenarios and return a comparison table."""
-    from src.like_day_forecast.pipelines.scenario_forecast import (
-        format_comparison_markdown,
-        run as run_scenarios,
-    )
-
-    scenario_list = [s.strip() for s in scenarios.split(",") if s.strip()]
-    parsed_exclude = [d.strip() for d in exclude_dates.split(",") if d.strip()] if exclude_dates else []
-    result = run_scenarios(
-        scenarios=scenario_list,
-        forecast_date=forecast_date,
-        base_config=configs.ScenarioConfig(
-            forecast_date=forecast_date,
-            exclude_dates=parsed_exclude,
-            exclude_holidays=exclude_holidays,
-        ),
-        cache_dir=configs.CACHE_DIR,
-        cache_enabled=configs.CACHE_ENABLED,
-        cache_ttl_hours=configs.CACHE_TTL_HOURS,
-        force_refresh=configs.FORCE_CACHE_REFRESH,
-    )
-
-    if format == OutputFormat.json:
-        comparison = result["comparison_table"].to_dict(orient="records")
-        per_scenario_summary = {}
-        for name, res in result["per_scenario"].items():
-            adj = res.get("adjustment", {})
-            per_scenario_summary[name] = {
-                "model_onpeak": adj.get("base_onpeak"),
-                "model_offpeak": adj.get("base_offpeak"),
-                "onpeak": adj.get("adj_onpeak"),
-                "offpeak": adj.get("adj_offpeak"),
-                "total_adj_onpeak": adj.get("total_onpeak"),
-                "total_adj_offpeak": adj.get("total_offpeak"),
-                "n_analogs": res.get("n_analogs_used"),
-                "deltas": [
-                    {
-                        "factor": d.label,
-                        "delta": d.delta,
-                        "unit": d.unit,
-                        "adj_onpeak": d.adj_onpeak,
-                        "adj_offpeak": d.adj_offpeak,
-                    }
-                    for d in res.get("deltas", [])
-                ],
-                "overrides": res.get("fundamental_overrides_applied", {}),
-            }
-        return {
-            "forecast_date": result["forecast_date"],
-            "scenarios_run": result["scenarios_run"],
-            "comparison": comparison,
-            "per_scenario": per_scenario_summary,
-        }
-
-    md = format_comparison_markdown(result)
-    return PlainTextResponse(content=md, media_type="text/markdown")
-
-
 @app.get("/views/like_day_strip_forecast_results")
 def get_like_day_strip_forecast_results(
     horizon: int = Query(3, description="Number of days ahead to forecast (1-7)"),
@@ -293,6 +136,61 @@ def get_like_day_strip_forecast_results(
     if format == OutputFormat.json:
         return vm
     return PlainTextResponse(content=format_like_day_strip_forecast_results(vm), media_type="text/markdown")
+
+
+@app.get("/views/supply_stack_forecast_results")
+def get_supply_stack_forecast_results(
+    forecast_date: str | None = Query(None, description="YYYY-MM-DD, defaults to tomorrow"),
+    region: str = Query("RTO", description="PJM region (RTO, WEST, MIDATL, SOUTH, etc.)"),
+    region_preset: str | None = Query(
+        None,
+        description="Optional preset scope: rto, south, dominion",
+    ),
+    gas_hub_col: str | None = Query(
+        None,
+        description="Optional gas hub override (e.g. gas_m3, gas_dom_south, gas_tz6)",
+    ),
+    format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
+):
+    """Run supply stack forecast and return a structured view model."""
+    config = SupplyStackConfig(
+        forecast_date=forecast_date,
+        region=region,
+        region_preset=region_preset,
+        gas_hub_col=gas_hub_col,
+    )
+    result = run_supply_stack_forecast(config=config)
+    vm = supply_stack_view_model(result)
+    if format == OutputFormat.json:
+        return vm
+    return PlainTextResponse(
+        content=format_supply_stack_forecast_results(vm),
+        media_type="text/markdown",
+    )
+
+
+@app.get("/views/supply_stack_validation_results")
+def get_supply_stack_validation_results(
+    forecast_date: str | None = Query(None, description="YYYY-MM-DD, defaults to tomorrow"),
+    region: str = Query("RTO", description="PJM region"),
+    region_preset: str | None = Query(None, description="Optional preset: rto, south, dominion"),
+    gas_hub_col: str | None = Query(None, description="Optional gas hub override"),
+    format: OutputFormat = Query(OutputFormat.md, description="Response format: md or json"),
+):
+    """Run supply stack validation checks and return diagnostics."""
+    config = SupplyStackConfig(
+        forecast_date=forecast_date,
+        region=region,
+        region_preset=region_preset,
+        gas_hub_col=gas_hub_col,
+    )
+    vm = supply_stack_validation_vm(config=config)
+    if format == OutputFormat.json:
+        return vm
+    return PlainTextResponse(
+        content=format_supply_stack_validation_results(vm),
+        media_type="text/markdown",
+    )
 
 
 @app.get("/views/outage_term_bible")
@@ -499,22 +397,36 @@ def get_regional_congestion(
 def get_ice_power_intraday(
     settle_lookback_days: int = Query(30, description="Lookback days for settlement history"),
     intraday_lookback_days: int = Query(3, description="Lookback days for intraday tape"),
+    products: str | None = Query(None, description="Comma-separated product filter (e.g. 'NxtDay DA,NxtDay RT')"),
+    delivery_date: str | None = Query(None, description="Filter to a single delivery date (YYYY-MM-DD)"),
+    include_snapshots: bool = Query(False, description="Include full (compressed) intraday snapshot tape"),
     format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
 ):
     """Return ICE PJM power settlements and intraday snapshot tape."""
+    from datetime import date as _date
+
     df_settles = pull_with_cache(
         source_name="ice_power_settles",
         pull_fn=ice_power_intraday.pull_settles,
-        pull_kwargs={"lookback_days": 30},
+        pull_kwargs={"lookback_days": settle_lookback_days},
         **CACHE_KWARGS,
     )
     df_intraday = pull_with_cache(
         source_name="ice_power_intraday",
         pull_fn=ice_power_intraday.pull_intraday,
-        pull_kwargs={"lookback_days": 3},
+        pull_kwargs={"lookback_days": intraday_lookback_days},
         **CACHE_KWARGS,
     )
-    vm = ice_power_view_model(df_settles, df_intraday)
+
+    product_list = [p.strip() for p in products.split(",")] if products else None
+    dd = _date.fromisoformat(delivery_date) if delivery_date else None
+
+    vm = ice_power_view_model(
+        df_settles, df_intraday,
+        products=product_list,
+        delivery_date=dd,
+        include_snapshots=include_snapshots,
+    )
     if format == OutputFormat.json:
         return vm
     return PlainTextResponse(content=format_ice_power_intraday(vm), media_type="text/markdown")
@@ -583,6 +495,66 @@ def get_lasso_qr_strip_forecast_results(
     return PlainTextResponse(
         content=format_lasso_qr_strip_forecast_results(vm), media_type="text/markdown",
     )
+
+
+@app.get("/views/lgbm_qr_forecast_results")
+def get_lgbm_qr_forecast_results(
+    forecast_date: str | None = Query(None, description="YYYY-MM-DD, defaults to tomorrow"),
+    format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
+):
+    """Run LightGBM Quantile Regression forecast and return structured view model."""
+    from src.lightgbm_quantile.pipelines.forecast import run as run_lgbm_qr
+    from src.lightgbm_quantile.configs import LGBMQRConfig
+    from src.views.lgbm_qr_forecast_results import build_view_model as lgbm_qr_view
+
+    config = LGBMQRConfig(forecast_date=forecast_date)
+    result = run_lgbm_qr(config=config)
+    vm = lgbm_qr_view(result)
+    if format == OutputFormat.json:
+        return vm
+    return PlainTextResponse(
+        content=format_lgbm_qr_forecast_results(vm),
+        media_type="text/markdown",
+    )
+
+
+@app.get("/views/lgbm_qr_strip_forecast_results")
+def get_lgbm_qr_strip_forecast_results(
+    horizon: int = Query(3, description="Number of days ahead to forecast (1-7)"),
+    format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
+):
+    """Run LightGBM QR strip forecast (D+1 through D+N) and return structured view model."""
+    from src.lightgbm_quantile.pipelines.strip_forecast import run_strip as run_lgbm_strip
+    from src.lightgbm_quantile.configs import LGBMQRConfig
+    from src.views.lgbm_qr_strip_forecast_results import build_view_model as lgbm_strip_view
+
+    config = LGBMQRConfig()
+    result = run_lgbm_strip(horizon=min(horizon, 7), config=config)
+    vm = lgbm_strip_view(result)
+    if format == OutputFormat.json:
+        return vm
+    return PlainTextResponse(
+        content=format_lgbm_qr_strip_forecast_results(vm),
+        media_type="text/markdown",
+    )
+
+
+@app.get("/views/gas_prices")
+def get_gas_prices(
+    lookback_days: int = Query(7, description="Number of recent trading days to include"),
+    format: OutputFormat = Query(OutputFormat.md, description="Response format: md (markdown) or json"),
+):
+    """Return ICE next-day cash gas prices for PJM-relevant hubs (M3, HH, Z5S, AGT)."""
+    df = pull_with_cache(
+        source_name="ice_gas_prices",
+        pull_fn=gas_prices.pull,
+        pull_kwargs={},
+        **CACHE_KWARGS,
+    )
+    vm = gas_prices_view_model(df, lookback_days=lookback_days)
+    if format == OutputFormat.json:
+        return vm
+    return PlainTextResponse(content=format_gas_prices(vm), media_type="text/markdown")
 
 
 # ── MCP integration — exposes all endpoints as agent tools ──────────
