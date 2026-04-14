@@ -7,6 +7,8 @@ select
     g.gas_day as date
     ,g.tetco_m3_cash as gas_m3_price
     ,g.hh_cash as gas_hh_price
+    ,g.transco_zone_5_south_cash as gas_z5s_price
+    ,g.agt_cash as gas_agt_price
 from ice_python_cleaned.ice_python_next_day_gas_daily g
 cross join params p
 where (p.start_date is null or g.gas_day >= p.start_date)

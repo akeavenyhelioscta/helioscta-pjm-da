@@ -6,7 +6,10 @@ with params as (
 base as (
     select
         w.interval_start_local::date as date
-        ,extract(hour from w.interval_end_local)::int as hour_ending
+        ,case
+            when extract(hour from w.interval_end_local)::int = 0 then 24
+            else extract(hour from w.interval_end_local)::int
+         end as hour_ending
         ,w.publish_time_local
         ,w.updated_at
         ,w.wind_forecast

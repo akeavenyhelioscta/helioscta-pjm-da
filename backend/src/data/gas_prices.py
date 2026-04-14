@@ -25,7 +25,7 @@ def pull(
     df = validate_source_frame(
         df=df,
         source_name="ice_gas_prices",
-        required_columns=["date", "gas_m3_price", "gas_hh_price"],
+        required_columns=["date", "gas_m3_price", "gas_hh_price", "gas_z5s_price", "gas_agt_price"],
         unique_key_columns=["date"],
         drop_duplicate_keys=True,
     )
