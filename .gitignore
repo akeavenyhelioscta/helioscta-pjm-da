@@ -63,6 +63,9 @@ docs/_build/
 *.csv
 *.xlsx
 
+# Allow supply stack reference data
+!backend/src/supply_stack_model/data/*.csv
+
 # misc folders
 .archive/*
 .excel/*

@@ -1,0 +1,13 @@
+block_id,fuel_type,capacity_mw,heat_rate_mmbtu_mwh,vom_usd_mwh,must_run,gas_hub,outage_weight
+nuclear_base,nuclear,33491.8,0.0,2.5,True,,0.0
+hydro_base,hydro,8444.3,0.0,1.5,False,,0.35
+cc_gas_tco,cc_gas,5831.8,6.86,2.0,False,gas_tco,1.0
+cc_gas_dom_south,cc_gas,3537.7,7.21,2.0,False,gas_dom_south,1.0
+ct_gas_tco,ct_gas,14233.7,7.22,3.5,False,gas_tco,1.0
+cc_gas_m3,cc_gas,20724.9,7.29,2.0,False,gas_m3,1.0
+ct_gas_dom_south,ct_gas,10272.9,7.87,3.5,False,gas_dom_south,1.0
+ct_gas_m3,ct_gas,41666.9,9.0,3.5,False,gas_m3,1.0
+ct_gas_tz6,ct_gas,20.6,10.5,3.5,False,gas_tz6,1.0
+coal_base,coal,36427.3,11.16,4.0,False,,1.0
+oil_base,oil,5010.1,14.84,5.0,False,,0.7
+other_base,other,2194.1,15.09,20.0,False,,0.75
