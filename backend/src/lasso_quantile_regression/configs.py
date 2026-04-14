@@ -129,6 +129,15 @@ class LassoQRConfig:
     alpha_grid: list[float] = field(
         default_factory=lambda: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0],
     )
+    quantile_alpha_scales: dict[float, float] = field(
+        default_factory=lambda: {0.10: 0.5, 0.25: 0.75, 0.50: 1.0, 0.75: 0.75, 0.90: 0.5},
+    )
+
+    # ── Target transform ────────────────────────────────────
+    use_asinh_transform: bool = True
+
+    # ── Recency weighting ───────────────────────────────────
+    recency_gamma: float | None = 0.997
 
     # ── Training window ──────────────────────────────────────
     train_window_days: int = 730

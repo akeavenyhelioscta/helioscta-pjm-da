@@ -135,6 +135,9 @@ def _add_interaction_terms(df: pd.DataFrame) -> None:
     if has_outage:
         df["outage_squared"] = df["tgt_outage_total_mw"] ** 2
 
+    if has_load and has_outage:
+        df["outage_x_load"] = df["tgt_outage_total_mw"] * df["tgt_load_daily_avg"]
+
 
 def _select_feature_cols(df: pd.DataFrame, config: LassoQRConfig) -> list[str]:
     """Select feature columns based on ``config.feature_set``."""
@@ -158,7 +161,7 @@ def _select_feature_cols(df: pd.DataFrame, config: LassoQRConfig) -> list[str]:
 
     if config.include_interaction_terms:
         for c in ["net_load", "reserve_margin_pct", "load_squared",
-                   "load_x_gas", "outage_squared"]:
+                   "load_x_gas", "outage_squared", "outage_x_load"]:
             if c in df.columns and c not in feature_cols:
                 feature_cols.append(c)
 

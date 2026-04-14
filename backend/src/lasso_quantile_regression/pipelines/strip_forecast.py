@@ -138,14 +138,16 @@ def run_strip(
         )
         X_pred = _build_X(ref_row, feature_cols)
 
-        # Predict all hours x quantiles
+        # Predict all hours x quantiles (inverse-transform if asinh was used)
+        use_asinh = model_bundle["artifact"].get("use_asinh_transform", False)
         forecasts: dict[int, dict[float, float]] = {}
         for h in HOURS:
             forecasts[h] = {}
             for q in config.quantiles:
                 key = (h, q)
                 if key in models:
-                    forecasts[h][q] = float(models[key].predict(X_pred)[0])
+                    raw = float(models[key].predict(X_pred)[0])
+                    forecasts[h][q] = float(np.sinh(raw)) if use_asinh else raw
         _enforce_monotonic_quantiles(forecasts, config.quantiles)
 
         # Forecast row (median)
@@ -187,16 +189,31 @@ def run_strip(
             _add_summary(q_row)
             quantile_rows.append(q_row)
 
+        # Per-hour forecast DataFrame (matches like-day per_day contract)
+        forecast_rows = []
+        for h in HOURS:
+            row_data = {"hour_ending": h, "point_forecast": forecasts[h].get(0.50)}
+            for q in config.quantiles:
+                row_data[f"q_{q:.2f}"] = forecasts[h].get(q)
+            forecast_rows.append(row_data)
+
         per_day[fd_str] = {
+            "df_forecast": pd.DataFrame(forecast_rows),
             "offset": offset,
             "day_type": day_type,
             "has_actuals": has_actuals,
         }
 
     cols = ["Date", "Type"] + [f"HE{h}" for h in HOURS] + ["OnPeak", "OffPeak", "Flat"]
+    strip_table = pd.DataFrame(strip_rows, columns=cols)
+    quantiles_table = pd.DataFrame(quantile_rows, columns=cols)
+
+    _print_strip_table(strip_table)
+    _print_strip_quantiles(quantiles_table)
+
     return {
-        "strip_table": pd.DataFrame(strip_rows, columns=cols),
-        "quantiles_table": pd.DataFrame(quantile_rows, columns=cols),
+        "strip_table": strip_table,
+        "quantiles_table": quantiles_table,
         "reference_date": str(ref_date),
         "forecast_dates": [str(d) for d in forecast_dates],
         "per_day": per_day,
@@ -338,21 +355,35 @@ def _pull_forecast_data(cache_kw: dict) -> dict:
         data["pjm_wind"] = None
 
     try:
-        data["meteo_solar"] = pull_with_cache(
+        df_solar_vintages = pull_with_cache(
             source_name="meteologica_solar_forecast_vintages",
             pull_fn=solar_forecast_vintages.pull_meteologica_vintages,
             pull_kwargs={},
             **cache_kw,
         )
+        data["meteo_solar"] = df_solar_vintages[
+            (df_solar_vintages["vintage_label"] == "Latest")
+            & (df_solar_vintages["region"] == ld_configs.RENEWABLE_FORECAST_REGION)
+        ].copy()
+        data["meteo_solar"] = data["meteo_solar"].rename(
+            columns={"forecast_mw": "forecast_generation_mw"},
+        )
     except Exception:
         data["meteo_solar"] = None
 
     try:
-        data["meteo_wind"] = pull_with_cache(
+        df_wind_vintages = pull_with_cache(
             source_name="meteologica_wind_forecast_vintages",
             pull_fn=wind_forecast_vintages.pull_meteologica_vintages,
             pull_kwargs={},
             **cache_kw,
+        )
+        data["meteo_wind"] = df_wind_vintages[
+            (df_wind_vintages["vintage_label"] == "Latest")
+            & (df_wind_vintages["region"] == ld_configs.RENEWABLE_FORECAST_REGION)
+        ].copy()
+        data["meteo_wind"] = data["meteo_wind"].rename(
+            columns={"forecast_mw": "forecast_generation_mw"},
         )
     except Exception:
         data["meteo_wind"] = None
@@ -415,3 +446,91 @@ def _build_synthetic_row(
         logger.warning(f"Synthetic row failed for {target_date}: {e}")
         ref_row = df[df["date"] == ref_date]
         return ref_row if len(ref_row) > 0 else None
+
+
+# ── Display helpers ──────────────────────────────────────────────────────
+
+DAY_ABBR = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
+
+
+def _print_strip_table(table: pd.DataFrame) -> None:
+    """Print the combined strip forecast table."""
+    print("\n" + "=" * 130)
+    print("  DA LMP LASSO QR STRIP FORECAST — Western Hub ($/MWh)")
+    print("=" * 130)
+
+    header = f"{'Date':<12} {'Type':<10}"
+    for h in range(1, 25):
+        header += f" {h:>6}"
+    header += f" {'OnPk':>7} {'OffPk':>7} {'Flat':>7}"
+    print(header)
+    print("-" * len(header))
+
+    prev_date = None
+    for _, row in table.iterrows():
+        if prev_date is not None and row["Date"] != prev_date:
+            print("-" * len(header))
+        prev_date = row["Date"]
+
+        line = f"{str(row['Date']):<12} {row['Type']:<10}"
+        for h in range(1, 25):
+            val = row[f"HE{h}"]
+            line += f" {val:>6.1f}" if pd.notna(val) else f" {'':>6}"
+        line += f" {row['OnPeak']:>7.2f}" if pd.notna(row["OnPeak"]) else f" {'':>7}"
+        line += f" {row['OffPeak']:>7.2f}" if pd.notna(row["OffPeak"]) else f" {'':>7}"
+        line += f" {row['Flat']:>7.2f}" if pd.notna(row["Flat"]) else f" {'':>7}"
+        print(line)
+
+    print("=" * 130 + "\n")
+
+
+def _print_strip_quantiles(table: pd.DataFrame) -> None:
+    """Print quantile bands for all strip days."""
+    if table.empty:
+        return
+
+    print("  Quantile Bands ($/MWh)")
+    print("-" * 100)
+
+    header = f"{'Date':<12} {'Band':<10}"
+    for h in range(1, 25):
+        header += f" {h:>6}"
+    header += f" {'OnPk':>7} {'OffPk':>7} {'Flat':>7}"
+    print(header)
+    print("-" * len(header))
+
+    prev_date = None
+    for _, row in table.iterrows():
+        if prev_date is not None and row["Date"] != prev_date:
+            print("-" * len(header))
+        prev_date = row["Date"]
+
+        line = f"{str(row['Date']):<12} {row['Type']:<10}"
+        for h in range(1, 25):
+            val = row[f"HE{h}"]
+            line += f" {val:>6.1f}" if pd.notna(val) else f" {'':>6}"
+        line += f" {row['OnPeak']:>7.2f}" if pd.notna(row["OnPeak"]) else f" {'':>7}"
+        line += f" {row['OffPeak']:>7.2f}" if pd.notna(row["OffPeak"]) else f" {'':>7}"
+        line += f" {row['Flat']:>7.2f}" if pd.notna(row["Flat"]) else f" {'':>7}"
+        print(line)
+
+    print("-" * len(header) + "\n")
+
+
+if __name__ == "__main__":
+    import src.settings  # noqa: F401
+
+    logging.basicConfig(level=logging.INFO)
+
+    today = date.today()
+    wd = today.weekday()
+    if wd <= 3:
+        horizon = 4 - wd
+    elif wd == 4:
+        horizon = 5
+    else:
+        horizon = 5
+
+    result = run_strip(horizon=horizon)
+    if "error" in result:
+        print(f"ERROR: {result['error']}")

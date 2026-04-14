@@ -85,27 +85,41 @@ def train_models(
 
     X_train = df_train[feature_cols].values
 
-    # Select alpha via time-series CV if enabled
-    alpha = config.alpha
+    # Select base alpha via time-series CV if enabled
+    base_alpha = config.alpha
     if config.alpha_search:
-        alpha = _select_alpha_cv(df_train, feature_cols, config)
-        logger.info(f"Selected alpha={alpha} via time-series CV")
+        base_alpha = _select_alpha_cv(df_train, feature_cols, config)
+        logger.info(f"Selected base alpha={base_alpha} via time-series CV")
+
+    # Recency weights: exponential decay so recent samples dominate
+    sample_weights = None
+    if config.recency_gamma is not None:
+        gamma = config.recency_gamma
+        sample_weights = gamma ** np.arange(n_samples - 1, -1, -1, dtype=float)
+        half_life = -np.log(2) / np.log(gamma) if gamma < 1.0 else float("inf")
+        logger.info(f"Recency weighting: gamma={gamma}, half-life={half_life:.0f} days")
 
     # Train Pipeline(StandardScaler -> QuantileRegressor) per (hour, quantile)
     models: dict[tuple[int, float], Pipeline] = {}
+    alpha_scales = config.quantile_alpha_scales
     for h in HOURS:
-        y_train = df_train[f"target_HE{h}"].values
+        y_raw = df_train[f"target_HE{h}"].values
+        y_train = np.arcsinh(y_raw) if config.use_asinh_transform else y_raw
         for q in config.quantiles:
+            q_alpha = base_alpha * alpha_scales.get(q, 1.0)
             pipe = Pipeline([
                 ("scaler", StandardScaler()),
                 ("qr", QuantileRegressor(
                     quantile=q,
-                    alpha=alpha,
+                    alpha=q_alpha,
                     solver="highs",
                     fit_intercept=True,
                 )),
             ])
-            pipe.fit(X_train, y_train)
+            fit_params = {}
+            if sample_weights is not None:
+                fit_params["qr__sample_weight"] = sample_weights
+            pipe.fit(X_train, y_train, **fit_params)
             models[(h, q)] = pipe
         logger.info(f"  HE{h}: trained {len(config.quantiles)} quantile models")
 
@@ -117,7 +131,10 @@ def train_models(
         "train_end": reference_date,
         "day_type_tag": config.day_type_tag,
         "n_samples": n_samples,
-        "alpha": alpha,
+        "alpha": base_alpha,
+        "quantile_alpha_scales": dict(alpha_scales),
+        "use_asinh_transform": config.use_asinh_transform,
+        "recency_gamma": config.recency_gamma,
         "trained_at": pd.Timestamp.now().isoformat(),
         "config_name": config.name,
     }
@@ -182,6 +199,9 @@ def _select_alpha_cv(
     best_alpha = config.alpha_grid[0]
     best_loss = float("inf")
 
+    use_asinh = config.use_asinh_transform
+    alpha_scales = config.quantile_alpha_scales
+
     for alpha in config.alpha_grid:
         total_loss = 0.0
         n_evals = 0
@@ -196,22 +216,36 @@ def _select_alpha_cv(
             X_tr = df_train.iloc[:train_end][feature_cols].values
             X_te = df_train.iloc[test_start:test_end][feature_cols].values
 
+            # Recency weights for this fold's training portion
+            fold_weights = None
+            if config.recency_gamma is not None:
+                n_tr = train_end
+                fold_weights = config.recency_gamma ** np.arange(
+                    n_tr - 1, -1, -1, dtype=float,
+                )
+
             for h in representative_hours:
                 y_col = f"target_HE{h}"
-                y_tr = df_train.iloc[:train_end][y_col].values
-                y_te = df_train.iloc[test_start:test_end][y_col].values
+                y_tr_raw = df_train.iloc[:train_end][y_col].values
+                y_te_raw = df_train.iloc[test_start:test_end][y_col].values
+                y_tr = np.arcsinh(y_tr_raw) if use_asinh else y_tr_raw
 
                 for q in config.quantiles:
+                    q_alpha = alpha * alpha_scales.get(q, 1.0)
                     pipe = Pipeline([
                         ("scaler", StandardScaler()),
                         ("qr", QuantileRegressor(
-                            quantile=q, alpha=alpha, solver="highs",
+                            quantile=q, alpha=q_alpha, solver="highs",
                         )),
                     ])
-                    pipe.fit(X_tr, y_tr)
-                    y_pred = pipe.predict(X_te)
+                    fit_params = {}
+                    if fold_weights is not None:
+                        fit_params["qr__sample_weight"] = fold_weights
+                    pipe.fit(X_tr, y_tr, **fit_params)
+                    y_pred_transformed = pipe.predict(X_te)
+                    y_pred = np.sinh(y_pred_transformed) if use_asinh else y_pred_transformed
 
-                    errors = y_te - y_pred
+                    errors = y_te_raw - y_pred
                     pinball = np.where(
                         errors >= 0, q * errors, (q - 1) * errors
                     )

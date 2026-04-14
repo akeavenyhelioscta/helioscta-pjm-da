@@ -33,6 +33,7 @@ _Q_LABELS = {
 
 def run(
     config: LassoQRConfig | None = None,
+    df_features: pd.DataFrame | None = None,
     **kwargs,
 ) -> dict:
     """Run single-day LASSO QR forecast.
@@ -56,13 +57,13 @@ def run(
     artifact = load_latest_model(config)
     if artifact is None:
         logger.info("No fresh model found, training...")
-        artifact = train_models(config, reference_date=reference_date)
+        artifact = train_models(config, reference_date=reference_date, df_features=df_features)
 
     models = artifact["models"]
     feature_cols: list[str] = artifact["feature_columns"]
 
     # 2. Build features
-    df, _ = build_regression_features(config)
+    df, _ = build_regression_features(config, df_features=df_features)
 
     ref_row = df[df["date"] == reference_date]
     if len(ref_row) == 0:
@@ -70,8 +71,9 @@ def run(
 
     X_pred = _build_X(ref_row, feature_cols)
 
-    # 3. Generate forecasts
-    forecasts = _predict_all(models, X_pred, config.quantiles)
+    # 3. Generate forecasts (inverse-transform if asinh was used at training)
+    use_asinh = artifact.get("use_asinh_transform", False)
+    forecasts = _predict_all(models, X_pred, config.quantiles, use_asinh=use_asinh)
     _enforce_monotonic_quantiles(forecasts, config.quantiles)
 
     # 4. Build output tables
@@ -94,6 +96,9 @@ def run(
         "metrics": metrics,
         "model_info": {
             "alpha": artifact["alpha"],
+            "quantile_alpha_scales": artifact.get("quantile_alpha_scales"),
+            "use_asinh_transform": artifact.get("use_asinh_transform", False),
+            "recency_gamma": artifact.get("recency_gamma"),
             "n_train_samples": artifact["n_samples"],
             "train_start": str(artifact["train_start"]),
             "train_end": str(artifact["train_end"]),
@@ -125,7 +130,10 @@ def _build_X(ref_row: pd.DataFrame, feature_cols: list[str]) -> np.ndarray:
 
 
 def _predict_all(
-    models: dict, X: np.ndarray, quantiles: list[float],
+    models: dict,
+    X: np.ndarray,
+    quantiles: list[float],
+    use_asinh: bool = False,
 ) -> dict[int, dict[float, float]]:
     """Predict all hours x quantiles → nested dict."""
     forecasts: dict[int, dict[float, float]] = {}
@@ -134,7 +142,8 @@ def _predict_all(
         for q in quantiles:
             key = (h, q)
             if key in models:
-                forecasts[h][q] = float(models[key].predict(X)[0])
+                raw = float(models[key].predict(X)[0])
+                forecasts[h][q] = float(np.sinh(raw)) if use_asinh else raw
     return forecasts
 
 
@@ -226,6 +235,50 @@ def _build_quantiles_table(
     return pd.DataFrame(rows, columns=cols)
 
 
+def _coverage(
+    quantiles_table: pd.DataFrame,
+    act: pd.Series,
+    lo_label: str,
+    hi_label: str,
+) -> float | None:
+    """Fraction of hours where actual falls within [lo_label, hi_label] band."""
+    lo = quantiles_table[quantiles_table["Type"] == lo_label]
+    hi = quantiles_table[quantiles_table["Type"] == hi_label]
+    if len(lo) == 0 or len(hi) == 0:
+        return None
+    lo_r, hi_r = lo.iloc[0], hi.iloc[0]
+    in_range = sum(
+        1
+        for h in HOURS
+        if (
+            lo_r[f"HE{h}"] is not None
+            and hi_r[f"HE{h}"] is not None
+            and act[f"HE{h}"] is not None
+            and lo_r[f"HE{h}"] <= act[f"HE{h}"] <= hi_r[f"HE{h}"]
+        )
+    )
+    return in_range / 24
+
+
+def _sharpness(
+    quantiles_table: pd.DataFrame,
+    lo_label: str,
+    hi_label: str,
+) -> float | None:
+    """Average width of the [lo_label, hi_label] prediction interval."""
+    lo = quantiles_table[quantiles_table["Type"] == lo_label]
+    hi = quantiles_table[quantiles_table["Type"] == hi_label]
+    if len(lo) == 0 or len(hi) == 0:
+        return None
+    lo_r, hi_r = lo.iloc[0], hi.iloc[0]
+    widths = []
+    for h in HOURS:
+        l_val, h_val = lo_r[f"HE{h}"], hi_r[f"HE{h}"]
+        if l_val is not None and h_val is not None:
+            widths.append(h_val - l_val)
+    return float(np.mean(widths)) if widths else None
+
+
 def _compute_metrics(
     output_table: pd.DataFrame, quantiles_table: pd.DataFrame,
 ) -> dict:
@@ -246,21 +299,15 @@ def _compute_metrics(
     rmse = float(np.sqrt(np.mean(errors_arr ** 2)))
     mape = float(np.mean(np.abs(errors_arr) / np.maximum(np.abs(actuals_arr), 1.0)) * 100)
 
-    # Coverage (P10-P90)
-    coverage_80 = None
-    p10 = quantiles_table[quantiles_table["Type"] == "P10"]
-    p90 = quantiles_table[quantiles_table["Type"] == "P90"]
-    if len(p10) > 0 and len(p90) > 0:
-        p10_r, p90_r = p10.iloc[0], p90.iloc[0]
-        in_range = sum(
-            1 for h in HOURS
-            if (p10_r[f"HE{h}"] is not None and p90_r[f"HE{h}"] is not None
-                and act[f"HE{h}"] is not None
-                and p10_r[f"HE{h}"] <= act[f"HE{h}"] <= p90_r[f"HE{h}"])
-        )
-        coverage_80 = in_range / 24
-
-    return {"mae": mae, "rmse": rmse, "mape": mape, "coverage_80pct": coverage_80}
+    return {
+        "mae": mae,
+        "rmse": rmse,
+        "mape": mape,
+        "coverage_80pct": _coverage(quantiles_table, act, "P10", "P90"),
+        "coverage_90pct": _coverage(quantiles_table, act, "P05", "P95"),
+        "coverage_98pct": _coverage(quantiles_table, act, "P01", "P99"),
+        "sharpness_90pct": _sharpness(quantiles_table, "P05", "P95"),
+    }
 
 
 def _extract_importances(
