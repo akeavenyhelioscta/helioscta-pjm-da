@@ -9,7 +9,7 @@ import pandas as pd
 
 from src.like_day_forecast import configs as ld_configs
 
-DEFAULT_QUANTILES = [0.10, 0.25, 0.50, 0.75, 0.90]
+DEFAULT_QUANTILES = [0.01, 0.05, 0.10, 0.25, 0.375, 0.50, 0.625, 0.75, 0.90, 0.95, 0.99]
 
 
 @dataclass

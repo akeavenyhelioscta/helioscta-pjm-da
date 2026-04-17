@@ -139,7 +139,7 @@ class LGBMQRConfig:
 
     # Model
     quantiles: list[float] = field(
-        default_factory=lambda: [0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99],
+        default_factory=lambda: [0.01, 0.05, 0.10, 0.25, 0.375, 0.50, 0.625, 0.75, 0.90, 0.95, 0.99],
     )
     n_estimators: int = 500
     max_depth: int = 6
