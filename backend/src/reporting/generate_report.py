@@ -109,6 +109,7 @@ def generate(
     cache_ttl_hours: float = configs.CACHE_TTL_HOURS,
     force_refresh: bool = configs.FORCE_CACHE_REFRESH,
     upload: bool = False,
+    only: list[str] | None = None,
 ) -> dict[str, Path]:
     """Generate individual + combined validation reports.
 
@@ -150,7 +151,8 @@ def generate(
     if pl:
         pl.section("Building Individual Reports")
 
-    for source_key, (label, build_fn) in FRAGMENT_REGISTRY.items():
+    registry = {k: v for k, v in FRAGMENT_REGISTRY.items() if k in only} if only else FRAGMENT_REGISTRY
+    for source_key, (label, build_fn) in registry.items():
         logger.info(f"Generating {label} validation report...")
 
         if pl:
@@ -282,6 +284,10 @@ def _parse_args() -> argparse.Namespace:
         "--upload", action="store_true",
         help="Upload reports to Azure Blob Storage after generation",
     )
+    parser.add_argument(
+        "--only", nargs="+", choices=FRAGMENT_REGISTRY.keys(), metavar="KEY",
+        help="Generate only the specified report sections (e.g. --only fuel_mix like_day_forecast_results)",
+    )
     return parser.parse_args()
 
 
@@ -296,6 +302,7 @@ def main():
         cache_ttl_hours=args.cache_ttl,
         force_refresh=args.force_refresh,
         upload=args.upload,
+        only=args.only,
     )
 
 
