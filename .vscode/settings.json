@@ -62,5 +62,16 @@
         }
     },
     "todo-tree.tree.groupedByTag": true,
-    "todo-tree.filtering.includeGlobs": ["**/*.md", "**/*.py", "**/*.ts", "**/*.tsx", "**/*.sql"]
+    "todo-tree.filtering.includeGlobs": [
+        "**/*.md",
+        "**/*.py",
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.sql"
+    ],
+    "workbench.editorAssociations": {
+        "*.parquet": "dbcode.dataFileViewer",
+        "*.csv": "duckdb.dataFileViewer",
+        "*.tsv": "duckdb.dataFileViewer"
+    }
 }
