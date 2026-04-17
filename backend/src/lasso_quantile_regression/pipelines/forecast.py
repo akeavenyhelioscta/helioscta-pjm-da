@@ -10,6 +10,18 @@ from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
+from colorama import Fore, Style, init as colorama_init
+
+colorama_init()
+_HL_FORECAST = Style.BRIGHT + Fore.RED
+_HL_QUARTILE = Fore.CYAN                  # P25 / P75
+_HL_INNER = Fore.YELLOW                   # P37.5 / P62.5
+_RS = Style.RESET_ALL
+_ROW_STYLES = {
+    "Forecast": _HL_FORECAST,
+    "P25": _HL_QUARTILE, "P75": _HL_QUARTILE,
+    "P37.5": _HL_INNER, "P62.5": _HL_INNER,
+}
 
 from src.lasso_quantile_regression.configs import (
     HOURS,
@@ -26,8 +38,8 @@ from src.lasso_quantile_regression.training.trainer import (
 logger = logging.getLogger(__name__)
 
 _Q_LABELS = {
-    0.01: "P01", 0.05: "P05", 0.10: "P10", 0.25: "P25", 0.50: "P50",
-    0.75: "P75", 0.90: "P90", 0.95: "P95", 0.99: "P99",
+    0.01: "P01", 0.05: "P05", 0.10: "P10", 0.25: "P25", 0.375: "P37.5",
+    0.50: "P50", 0.625: "P62.5", 0.75: "P75", 0.90: "P90", 0.95: "P95", 0.99: "P99",
 }
 
 
@@ -79,6 +91,16 @@ def run(
     # 4. Build output tables
     output_table = _build_output_table(df, forecast_date, forecasts)
     quantiles_table = _build_quantiles_table(forecast_date, forecasts, config.quantiles)
+
+    # Insert Forecast row into quantile bands after P50
+    fc_rows = output_table[output_table["Type"] == "Forecast"].iloc[0:1].copy()
+    p50_idx = quantiles_table[quantiles_table["Type"] == "P50"].index
+    if len(fc_rows) > 0 and len(p50_idx) > 0:
+        pos = p50_idx[0] + 1
+        quantiles_table = pd.concat([
+            quantiles_table.iloc[:pos], fc_rows, quantiles_table.iloc[pos:],
+        ]).reset_index(drop=True)
+
     has_actuals = "Actual" in output_table["Type"].values
 
     # 5. Metrics
@@ -376,6 +398,9 @@ def _print_table(table: pd.DataFrame, metrics: dict | None) -> None:
         line += f" {row['OnPeak']:>7.2f}" if pd.notna(row['OnPeak']) else f" {'':>7}"
         line += f" {row['OffPeak']:>7.2f}" if pd.notna(row['OffPeak']) else f" {'':>7}"
         line += f" {row['Flat']:>7.2f}" if pd.notna(row['Flat']) else f" {'':>7}"
+        style = _ROW_STYLES.get(row["Type"])
+        if style:
+            line = f"{style}{line}{_RS}"
         print(line)
 
     print("-" * len(header))
@@ -410,6 +435,9 @@ def _print_quantiles(table: pd.DataFrame) -> None:
         line += f" {row['OnPeak']:>7.2f}" if pd.notna(row['OnPeak']) else f" {'':>7}"
         line += f" {row['OffPeak']:>7.2f}" if pd.notna(row['OffPeak']) else f" {'':>7}"
         line += f" {row['Flat']:>7.2f}" if pd.notna(row['Flat']) else f" {'':>7}"
+        style = _ROW_STYLES.get(row["Type"])
+        if style:
+            line = f"{style}{line}{_RS}"
         print(line)
 
     print("-" * len(header) + "\n")
