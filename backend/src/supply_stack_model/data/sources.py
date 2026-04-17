@@ -291,9 +291,20 @@ def _normalize_hourly_gas(
     aligned = align_gas_to_electric_day(df_gas)
     day = _day_slice(aligned, target_date=target_date, date_col="date")
     if len(day) == 0:
-        raise ValueError(
-            f"No gas rows found after alignment for target_date={target_date}"
+        # Next-day gas for the target electric day may not be published yet.
+        # Fall back to the latest available electric day.
+        aligned_dates = pd.to_datetime(aligned["date"]).dt.date
+        latest = aligned_dates.max()
+        logger.warning(
+            "No gas rows for electric day %s — falling back to %s",
+            target_date, latest,
         )
+        day = _day_slice(aligned, target_date=latest, date_col="date")
+        if len(day) == 0:
+            raise ValueError(
+                f"No gas rows found after alignment for target_date={target_date} "
+                f"(fallback to {latest} also empty)"
+            )
 
     out = day[["hour_ending", gas_hub_col]].copy()
     out = out.rename(columns={gas_hub_col: "gas_price_usd_mmbtu"})
