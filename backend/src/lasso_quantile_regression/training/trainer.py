@@ -193,7 +193,12 @@ def _select_alpha_cv(
     across representative hours (HE8, HE12, HE17, HE20) and all quantiles.
     """
     n = len(df_train)
-    fold_size = n // (n_folds + 1)
+    n_features = len(feature_cols)
+
+    # Ensure the first fold has at least 2x features as training samples
+    # to avoid degenerate solutions that bias toward high alpha.
+    min_train_size = min(2 * n_features, n // 2)
+    fold_size = max(1, (n - min_train_size) // n_folds)
     representative_hours = [8, 12, 17, 20]
 
     best_alpha = config.alpha_grid[0]
@@ -207,7 +212,7 @@ def _select_alpha_cv(
         n_evals = 0
 
         for fold in range(n_folds):
-            train_end = (fold + 1) * fold_size
+            train_end = min_train_size + fold * fold_size
             test_start = train_end
             test_end = min(test_start + fold_size, n)
             if test_end <= test_start:
@@ -229,6 +234,10 @@ def _select_alpha_cv(
                 y_tr_raw = df_train.iloc[:train_end][y_col].values
                 y_te_raw = df_train.iloc[test_start:test_end][y_col].values
                 y_tr = np.arcsinh(y_tr_raw) if use_asinh else y_tr_raw
+                # Evaluate CV in the same space the model optimizes in.
+                # Inverse-transforming via sinh() amplifies overfit predictions
+                # and makes low-alpha models look catastrophically bad.
+                y_te = np.arcsinh(y_te_raw) if use_asinh else y_te_raw
 
                 for q in config.quantiles:
                     q_alpha = alpha * alpha_scales.get(q, 1.0)
@@ -242,10 +251,9 @@ def _select_alpha_cv(
                     if fold_weights is not None:
                         fit_params["qr__sample_weight"] = fold_weights
                     pipe.fit(X_tr, y_tr, **fit_params)
-                    y_pred_transformed = pipe.predict(X_te)
-                    y_pred = np.sinh(y_pred_transformed) if use_asinh else y_pred_transformed
+                    y_pred = pipe.predict(X_te)
 
-                    errors = y_te_raw - y_pred
+                    errors = y_te - y_pred
                     pinball = np.where(
                         errors >= 0, q * errors, (q - 1) * errors
                     )

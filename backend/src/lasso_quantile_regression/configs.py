@@ -32,10 +32,8 @@ FUNDAMENTAL_COLS = [
     "tgt_load_daily_avg", "tgt_load_daily_peak", "tgt_load_daily_valley",
     "tgt_load_west_daily_avg", "tgt_load_west_daily_peak",
     "tgt_load_morning_ramp", "tgt_load_evening_ramp",
-    # Gas
+    # Gas (M3 only — linear model can't distinguish regime-dependent basis)
     "gas_m3_daily_avg", "gas_m3_onpeak_avg", "gas_m3_offpeak_avg",
-    "gas_dom_south_daily_avg",
-    "gas_basis_m3_dom_south",
     # Outages (target-date forecasts + reference-day actuals)
     "tgt_outage_total_mw", "tgt_outage_forced_mw",
     "outage_total_mw", "outage_forced_mw",
@@ -65,6 +63,15 @@ DEFAULT_DROP_FEATURE_PREFIXES = [
     "lmp_profile_h",          # circular regime anchoring
     "fuel_share_",            # endogenous / leakage-prone
     "gas_basis_",             # low incremental value in recent runs
+    "gas_tco",                # consolidate gas to M3 only
+    "gas_tz6",                # consolidate gas to M3 only
+    "gas_tz5",                # consolidate gas to M3 only
+    "gas_dom_south",          # consolidate gas to M3 only
+    "gas_ventura",            # consolidate gas to M3 only
+    "gas_m2",                 # consolidate gas to M3 only
+    "gas_tn4",                # consolidate gas to M3 only
+    "gas_leidy",              # consolidate gas to M3 only
+    "gas_chicago",            # consolidate gas to M3 only
     "congestion_daily_",      # consistently unused
     "congestion_onpeak_avg",  # consistently unused
     "congestion_7d_rolling_std",
@@ -122,15 +129,18 @@ class LassoQRConfig:
 
     # ── Model ────────────────────────────────────────────────
     quantiles: list[float] = field(
-        default_factory=lambda: [0.10, 0.25, 0.50, 0.75, 0.90],
+        default_factory=lambda: [0.01, 0.05, 0.10, 0.25, 0.375, 0.50, 0.625, 0.75, 0.90, 0.95, 0.99],
     )
     alpha: float = 0.1
     alpha_search: bool = True
     alpha_grid: list[float] = field(
-        default_factory=lambda: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0],
+        default_factory=lambda: [0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0],
     )
     quantile_alpha_scales: dict[float, float] = field(
-        default_factory=lambda: {0.10: 0.5, 0.25: 0.75, 0.50: 1.0, 0.75: 0.75, 0.90: 0.5},
+        default_factory=lambda: {
+            0.01: 0.3, 0.05: 0.4, 0.10: 0.5, 0.25: 0.75, 0.375: 0.9,
+            0.50: 1.0, 0.625: 0.9, 0.75: 0.75, 0.90: 0.5, 0.95: 0.4, 0.99: 0.3,
+        },
     )
 
     # ── Target transform ────────────────────────────────────
